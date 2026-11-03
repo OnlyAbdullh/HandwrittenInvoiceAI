@@ -237,3 +237,40 @@ class TestTruthLookup:
         assert by_role["merchant_name"] == "حسام المارديني"
         assert by_role["total_in_figures"] == "120"
         assert all(row["text"] is None for row in rows if row["role"] in ("quantity", "product_name"))
+
+
+class TestIsolation:
+    """Each model runs in its own process: a native crash costs that model only."""
+
+    def test_a_crashing_model_becomes_a_row_not_the_end_of_the_run(self, bench, tmp_path):
+        import sys
+
+        candidate = bench.Candidate("Qari-OCR-v0.3", tmp_path, "chat_vlm")
+        crash = [sys.executable, "-c", "import sys; sys.stderr.write('CUDA error: illegal memory access\\n'); sys.exit(3)"]
+
+        result = bench.run_isolated(candidate, crash, tmp_path / "never-written.json")
+
+        assert result.name == "Qari-OCR-v0.3"
+        assert "crashed: exit code 3" in result.skipped_reason
+        assert "illegal memory access" in result.skipped_reason
+
+    def test_a_finished_child_hands_back_its_result(self, bench, tmp_path):
+        import sys
+
+        result_file = tmp_path / "result.json"
+        payload = {"name": "m", "family": "gguf", "device": "llama.cpp", "load_s": 1.5, "skipped_reason": None,
+                   "per_crop": [{"image": "a.png", "cer": 0.0, "valid": True, "seconds": 0.2, "confidence": 0.9}]}
+        write = [sys.executable, "-c",
+                 f"import json, pathlib; pathlib.Path({str(result_file)!r}).write_text(json.dumps({payload!r}))"]
+
+        result = bench.run_isolated(bench.Candidate("m", tmp_path, "gguf"), write, result_file)
+
+        assert result.skipped_reason is None
+        assert result.exact_match_rate == 1.0 and result.load_s == 1.5
+
+    @pytest.mark.parametrize("code, words", [
+        (3221225477, "access violation"), (-1073741819, "access violation"),
+        (-11, "segmentation fault"), (-9, "out-of-memory killer"), (7, "exit code 7"),
+    ])
+    def test_native_crash_codes_are_named(self, bench, code, words):
+        assert words in bench.describe_exit(code)

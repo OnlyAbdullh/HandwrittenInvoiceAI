@@ -721,6 +721,71 @@ Struck-through readings are ones the pipeline's output validation would reject.<
 </body></html>"""
 
 
+def describe_exit(code: int) -> str:
+    """A crashed model's exit code, in words where it is a known one."""
+    known = {
+        0xC0000005: "access violation (a native crash, typically in CUDA or bitsandbytes)",
+        0xC0000409: "stack buffer overrun (a native crash)",
+        0xC00000FD: "stack overflow",
+        0xC0000017: "out of memory",
+        -9: "killed (SIGKILL, typically the out-of-memory killer)",
+        -11: "segmentation fault (a native crash)",
+    }
+    # POSIX reports a signal as a small negative number; Windows reports an
+    # NTSTATUS, unsigned (3221225477) or signed (-1073741819) depending on the caller.
+    key = code if -64 < code < 0 else code & 0xFFFFFFFF
+    return known.get(key, f"exit code {code}")
+
+
+def run_isolated(candidate: Candidate, command: list[str], result_file: Path) -> ModelResult:
+    """Run one model in its own process, so a native crash costs that model only.
+
+    A model that crashes inside CUDA or bitsandbytes takes the whole Python
+    process with it -- no exception, no traceback, no report. In a child
+    process it becomes one row reading "crashed", and the GPU memory it held is
+    returned to the next model in full.
+    """
+    import subprocess
+    import threading
+    from collections import deque
+
+    tail: deque[str] = deque(maxlen=12)
+    proc = subprocess.Popen(command, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+
+    def echo() -> None:
+        for line in proc.stderr:
+            sys.stderr.write(line)
+            if line.strip():
+                tail.append(line.rstrip())
+
+    reader = threading.Thread(target=echo, daemon=True)
+    reader.start()
+    code = proc.wait()
+    reader.join(timeout=5)
+
+    if code == 0 and result_file.exists():
+        data = json.loads(result_file.read_text(encoding="utf-8"))
+        return ModelResult(
+            name=data["name"], family=data.get("family", ""), skipped_reason=data.get("skipped_reason"),
+            device=data.get("device"), load_s=data.get("load_s", 0.0), per_crop=data.get("per_crop", []),
+        )
+    last = " | ".join(list(tail)[-3:])
+    return ModelResult(
+        name=candidate.name, family=candidate.family,
+        skipped_reason=f"crashed: {describe_exit(code)}" + (f" -- last output: {last[:400]}" if last else ""),
+    )
+
+
+def write_reports(out: Path, results: list[ModelResult], crops: list[dict], mode: str, crops_label: str) -> None:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.with_suffix(".md").write_text(to_markdown(results, mode, crops_label), encoding="utf-8")
+    out.with_suffix(".json").write_text(
+        json.dumps([{**r.summary(), "per_crop": r.per_crop} for r in results], ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    out.with_suffix(".html").write_text(to_html(results, crops, mode, crops_label), encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--crops", default="datasets/crops")
@@ -733,7 +798,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="llama-server executable for GGUF models (default: INVOICE_AI_LLAMA_SERVER or PATH)")
     ap.add_argument("--gpu-layers", default=os.environ.get("INVOICE_AI_LLAMA_GPU_LAYERS"),
                     help="GGUF only: 'all', '0' (CPU) or a count; default lets llama.cpp fit the free VRAM")
+    ap.add_argument("--no-isolate", action="store_true",
+                    help="run every model in this process (faster to start; one native crash ends the run)")
     ap.add_argument("--out", default="evaluation/reports/model_benchmark")
+    # Internal: the child-process side of isolation.
+    ap.add_argument("--exact", help=argparse.SUPPRESS)
+    ap.add_argument("--result-file", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
     crops_path = Path(args.crops)
@@ -744,36 +814,62 @@ def main(argv: list[str] | None = None) -> int:
               f"  python tools/export_crops.py --photo <your invoice photo> --out {args.crops}", file=sys.stderr)
         return 2
     crops = load_crops(crops_path)
+    gpu_layers = None if (args.gpu_layers or "auto").lower() == "auto" else args.gpu_layers
+
+    if args.result_file:
+        # Child process: run exactly one model and hand the result back.
+        candidate = next(c for c in discover(Path(args.models), None) if c.name == args.exact)
+        result = run_model(candidate, crops, args.max_crops, args.mode, args.llama_server, gpu_layers)
+        Path(args.result_file).write_text(
+            json.dumps({**result.summary(), "per_crop": result.per_crop}, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
+        return 0
+
     labelled = sum(row.get("text") is not None for row in crops)
     print(f"{len(crops)} crop(s) from {crops_path} ({labelled} labelled). Mode: {args.mode}.")
+    if labelled and labelled < 5:
+        print(f"Only {labelled} crop(s) carry a correct answer, so error rates rest on very little. "
+              f"Type the right text into the other `text` fields of {crops_path / 'labels.jsonl'} for a real comparison.")
 
-    gpu_layers = None if (args.gpu_layers or "auto").lower() == "auto" else args.gpu_layers
     candidates = discover(Path(args.models), args.only)
     if not candidates:
         print(f"No models found under {args.models}.", file=sys.stderr)
         return 2
 
-    results: list[ModelResult] = []
-    for candidate in candidates:
-        print(f"\n== {candidate.name}", flush=True)
-        result = run_model(candidate, crops, args.max_crops, args.mode, args.llama_server, gpu_layers)
-        if result.skipped_reason:
-            print(f"   skipped: {result.skipped_reason}")
-        else:
-            print(f"   {result.family} on {result.device}: CER {result.mean_cer}, exact {result.exact_match_rate}, "
-                  f"passes validation {result.valid_rate}, {result.mean_seconds}s/crop (load {result.load_s}s)")
-        results.append(result)
-
     out = Path(args.out)
     if not out.is_absolute():
         out = PROJECT_ROOT / out
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.with_suffix(".md").write_text(to_markdown(results, args.mode, args.crops), encoding="utf-8")
-    out.with_suffix(".json").write_text(
-        json.dumps([{**r.summary(), "per_crop": r.per_crop} for r in results], ensure_ascii=False, indent=2, default=str),
-        encoding="utf-8",
-    )
-    out.with_suffix(".html").write_text(to_html(results, crops, args.mode, args.crops), encoding="utf-8")
+
+    import tempfile
+
+    results: list[ModelResult] = []
+    with tempfile.TemporaryDirectory(prefix="ocr-bench-") as scratch:
+        for index, candidate in enumerate(candidates):
+            print(f"\n== {candidate.name}", flush=True)
+            if candidate.skipped_reason or args.no_isolate:
+                result = run_model(candidate, crops, args.max_crops, args.mode, args.llama_server, gpu_layers)
+            else:
+                result_file = Path(scratch) / f"{index}.json"
+                command = [
+                    sys.executable, str(Path(__file__).resolve()),
+                    "--crops", str(crops_path), "--models", str(args.models), "--mode", args.mode,
+                    "--llama-server", args.llama_server, "--exact", candidate.name, "--result-file", str(result_file),
+                ]
+                if args.max_crops:
+                    command += ["--max-crops", str(args.max_crops)]
+                if args.gpu_layers:
+                    command += ["--gpu-layers", args.gpu_layers]
+                result = run_isolated(candidate, command, result_file)
+
+            if result.skipped_reason:
+                print(f"   skipped: {result.skipped_reason}")
+            else:
+                print(f"   {result.family} on {result.device}: CER {result.mean_cer}, exact {result.exact_match_rate}, "
+                      f"passes validation {result.valid_rate}, {result.mean_seconds}s/crop (load {result.load_s}s)")
+            results.append(result)
+            # After every model: a run interrupted later still leaves a report.
+            write_reports(out, results, crops, args.mode, args.crops)
 
     ranked, by_cer = rank(results)
     print("\nRanking (" + ("lowest CER first" if by_cer else "no labels: most readings passing validation first") + "):")
