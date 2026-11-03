@@ -422,7 +422,17 @@ class TestPureHelpers:
             with pytest.raises(ValueError, match="may not set"):
                 check_extra_args(forbidden)
 
-    def test_executable_resolution(self, tmp_path):
+    def test_a_winget_install_is_found_when_path_does_not_say(self, tmp_path, monkeypatch):
+        package = tmp_path / "Microsoft" / "WinGet" / "Packages" / "ggml.llamacpp_Microsoft.Winget.Source_8wekyb3d8bbwe"
+        package.mkdir(parents=True)
+        (package / "llama-server.exe").write_text("")
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        monkeypatch.setenv("PATH", "")
+
+        assert resolve_executable("llama-server") == str(package / "llama-server.exe")
+
+    def test_executable_resolution(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "no-winget-here"))
         with pytest.raises(FileNotFoundError, match="not found on PATH"):
             resolve_executable("llama-server-that-does-not-exist")
         with pytest.raises(FileNotFoundError, match="not found at"):

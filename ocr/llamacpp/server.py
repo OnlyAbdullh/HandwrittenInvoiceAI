@@ -77,6 +77,29 @@ _LOG_TAIL_LINES = 40
 _CREATE_NO_WINDOW = 0x08000000
 
 
+def _winget_install(name: str) -> str | None:
+    """llama-server where `winget install llama.cpp` put it, if PATH does not say.
+
+    winget unpacks the release into its own package folder and links it onto
+    PATH -- but a PowerShell window opened before the install, or a desktop
+    app started before it, does not see that PATH change, and on some machines
+    the link is never created. The package folder is predictable, so it is
+    looked in directly rather than making the user find it.
+    """
+    local = os.environ.get("LOCALAPPDATA")
+    if not local:
+        return None
+    winget = Path(local) / "Microsoft" / "WinGet"
+    executable = name if name.lower().endswith(".exe") else f"{name}.exe"
+    candidates = [winget / "Links" / executable]
+    candidates += sorted((winget / "Packages").glob(f"ggml.llamacpp_*/{executable}"))
+    candidates += sorted((winget / "Packages").glob(f"ggml.llamacpp_*/*/{executable}"))
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 def resolve_executable(server_path: str) -> str:
     """The llama-server binary `server_path` names: a path, or a name on PATH.
 
@@ -93,7 +116,7 @@ def resolve_executable(server_path: str) -> str:
     looks_like_path = candidate.is_absolute() or "/" in text or "\\" in text
 
     if not looks_like_path and not candidate.exists():
-        found = shutil.which(text)
+        found = shutil.which(text) or _winget_install(text)
         if found is None:
             raise FileNotFoundError(
                 f"'{text}' was not found on PATH. Install llama.cpp (see docs/llamacpp-nuqta-setup.md) "
