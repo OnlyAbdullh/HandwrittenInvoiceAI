@@ -52,6 +52,11 @@ python main.py path/to/invoice.jpg
 python main.py path/to/invoice.jpg config/qwen_config.yaml
 python run_batch.py bills/ --config config/qwen_config.yaml
 
+# The GGUF backend (Nuqta Arabic OCR 4B via llama.cpp) -- docs/llamacpp-nuqta-setup.md
+python main.py path/to/invoice.jpg config/nuqta_config.yaml
+python tools/check_llamacpp_setup.py [--start] [--image cell.png --kind number]
+INVOICE_AI_CONFIG_PATH=config/nuqta_config.yaml python -m api.main
+
 # Tests
 pytest
 pytest tests/test_invoice_parser.py               # one file
@@ -185,6 +190,26 @@ Heavy OCR engines (`surya`, `qwen_vlm`), the Surya detector and the Qwen recogni
 imported defensively in their packages' `__init__.py` — a machine missing their
 dependencies still starts the service; those components just don't register. `requirements.txt` installs only the light path
 (`tesseract`); installing `surya`/VLM deps is opt-in (see README.md's OCR engine table).
+
+### Two runtimes for the VLM recognizer
+
+The layout-driven flow's recognizer has two interchangeable implementations, selected by
+`ocr.recognizer.name` (server-owned, so the C# side is unaffected):
+
+| Recognizer | Runtime | Config |
+|---|---|---|
+| `qwen` | transformers, in `tools/qwen_worker.py` (a subprocess in its own venv) | `default_config.yaml`, `qwen_config.yaml` |
+| `llamacpp` | a private `llama-server` (llama.cpp) reading a GGUF model + `mmproj` | `nuqta_config.yaml` |
+
+Both subclass `ocr/recognizers/prompted_recognizer.PromptedRecognizer`, which owns
+batching, per-crop failure isolation and `output_validation`; a subclass only supplies a
+backend with `read_batch([(PIL image, kind)]) -> [Recognition]`. Both use the same prompts
+(`qwen_vlm_engine.PROMPTS`) and the same per-kind decoding policy (`ocr/decoding_policy.py`,
+standard-library only because the worker imports it from its own venv): the transformers
+side enforces character sets with a byte-level `LogitsProcessor`, the llama.cpp side with a
+GBNF grammar. `ocr/llamacpp/` is the llama.cpp half: `gguf.py` (header checks — wrong,
+swapped, truncated files fail before anything loads), `server.py` (process lifecycle),
+`client.py` (request/response, confidence).
 
 ### Configuration: two shapes, one bridge
 
@@ -340,6 +365,26 @@ touching prompts or models.
 rules vote too, and expands the canvas so no corner is clipped.
 `tools/compare_deskew.py` renders old against new over a folder of real invoices;
 `tools/render_layout.py` draws what the extractor found and what the classifier made of it.
+
+**llama-server reports a fabricated 1.0 unless `top_logprobs >= 1`.** With `logprobs: true`
+and `top_logprobs: 0` it never computes token probabilities and reports every token as
+certain. With `top_logprobs >= 1` and `post_sampling_probs` off (the default), each token's
+probability is a softmax over the raw logits — before the grammar and the repetition
+penalty — which is exactly what the transformers worker reports. Verified on a real build:
+a grammar-forced digit came back with the model's own low probability, not 1.0. Keep both
+settings, or confidence becomes a lie.
+
+**llama.cpp's Qwen-VL image floor is 8 tokens; the HF processor's is ~64.** The transformers
+path enlarges any crop under 65536 px before the model sees it; llama.cpp would hand a small
+cell over at a fraction of that resolution. `image_min_tokens: 64` (`--image-min-tokens`)
+restores parity. Don't drop it without measuring.
+
+**A llama-server must not outlive its owner.** The server object is usually
+garbage-collected *before* interpreter exit (the CLI's orchestrator just goes out of scope),
+so cleanup is a `weakref.finalize` holding the process — an atexit list of weakly-held
+servers had already forgotten it and left the process running. On Windows a Job Object
+(`KILL_ON_JOB_CLOSE`) also covers the service being force-killed.
+`tests/test_llamacpp_backend.py` pins both cases.
 
 ### Output formatters and persistence
 

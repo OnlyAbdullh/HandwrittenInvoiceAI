@@ -144,12 +144,31 @@ sent to the model. Other engines still exist for other flows.
 | Reader | Needs | Notes |
 |---|---|---|
 | `qwen` recognizer (default) | the VLM worker's virtualenv (`requirements-vlm.txt`) and a model directory | Set `INVOICE_AI_VLM_PYTHON` and `INVOICE_AI_MODEL_DIR` (see `docs/settings-config-contract.md` §4). |
+| `llamacpp` recognizer | `llama-server` (llama.cpp b7990+) and a GGUF model + its `mmproj` | **Nuqta Arabic OCR 4B**: `config/nuqta_config.yaml`. No second virtualenv, no torch; runs on CPU, GPU, or both. Setup: [docs/llamacpp-nuqta-setup.md](docs/llamacpp-nuqta-setup.md). |
 | `stub` | nothing | Deterministic fake output, for testing the plumbing. Never for real invoices. |
 | `tesseract` | the Tesseract **binary** plus `ara`/`eng` traineddata | Weak on handwriting. |
 | `surya` engine / detector | `requirements-surya.txt` | The detector drives the `detector_driven` flow. |
 
 Heavy components are imported defensively, so a machine without their dependencies still
 starts the service; the missing ones simply do not register.
+
+#### Switching between the transformers and GGUF backends
+
+Both are installed side by side and chosen by which configuration the service loads:
+
+```powershell
+$env:INVOICE_AI_CONFIG_PATH = "config/nuqta_config.yaml"   # Nuqta GGUF via llama.cpp
+python -m api.main
+
+Remove-Item Env:INVOICE_AI_CONFIG_PATH                      # back to default_config.yaml (Qwen, transformers)
+python -m api.main
+```
+
+With the `llamacpp` recognizer the service starts `llama-server` itself — on loopback, on
+a private port, with a per-launch key — keeps the model loaded across requests, restarts
+it if it crashes, and stops it on shutdown. `python tools/check_llamacpp_setup.py` checks
+the install and the two model files without downloading anything. Everything else —
+preprocessing, layout, prompts, validation, the response shape — is the same pipeline.
 
 ### Measuring accuracy
 

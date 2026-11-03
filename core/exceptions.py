@@ -26,6 +26,31 @@ class RecognitionTimeoutError(PipelineError):
     """
 
 
+class ModelFileError(PipelineError):
+    """A model file exists but is not what the configuration says it is.
+
+    Wrong format, truncated, or the two files of a vision model swapped. This
+    is the machine's state, not the request's, so it is deliberately *not* a
+    ValueError: the HTTP layer reports ValueErrors raised while building a
+    pipeline as the client's invalid configuration (422), and a broken model
+    install as "engine not ready" (503).
+    """
+
+
+class InferenceServerError(PipelineError):
+    """A local inference server could not be started, or answered with an error.
+
+    Carries the tail of the server's own log when there is one, because the
+    server's reason ("failed to load model", "out of memory", "unknown model
+    architecture") is the only useful part of the failure.
+    """
+
+    def __init__(self, message: str, log_tail: str = ""):
+        text = message if not log_tail else f"{message}\n--- llama-server log (tail) ---\n{log_tail}"
+        super().__init__(text)
+        self.log_tail = log_tail
+
+
 class NotImplementedStrategyError(PipelineError, NotImplementedError):
     """Raised by a strategy variant that was deliberately left unbuilt
     (e.g. an alternative algorithm not yet implemented), as opposed to a

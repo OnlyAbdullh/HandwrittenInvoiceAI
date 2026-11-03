@@ -17,7 +17,8 @@ Protocol: one JSON object per line in, one per line out.
 
 `results` always has exactly one entry per item, in order.
 
-Decoding is chosen per content kind, because a digit cell and a product name
+Decoding is chosen per content kind (the table is ``ocr/decoding_policy.py``,
+shared with the llama.cpp backend), because a digit cell and a product name
 fail in opposite ways:
 
 * number / code / date -- generation is **constrained** to the characters the
@@ -56,7 +57,21 @@ from pathlib import Path
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
-MAX_SIDE = 768
+# This file runs as a script in the VLM's own virtualenv, where the project root
+# is not on sys.path. The decoding policy is shared with the llama.cpp backend
+# and is standard-library only, so importing it needs nothing that venv lacks.
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from ocr.decoding_policy import (  # noqa: E402
+    DATE_CHARS as _DATE_CHARS,
+    DIGITS as _DIGITS,
+    GENERATION,
+    MAX_IMAGE_SIDE as MAX_SIDE,
+    NUMBER_CHARS as _NUMBER_CHARS,
+)
+
 MULTIPLE = 64
 
 ARCH_CLASSES = {
@@ -65,25 +80,7 @@ ARCH_CLASSES = {
 }
 FALLBACK_CLASS = "AutoModelForImageTextToText"
 
-_DIGITS = "0123456789٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹"
-_NUMBER_CHARS = frozenset(_DIGITS + ".,٫٬،- ")
-_DATE_CHARS = frozenset(_DIGITS + "/.-٫، ")
-
-# Per content kind: the token budget, which character set (if any) generation is
-# constrained to, and the penalties. Budgets are deliberately tight -- a
-# quantity is a few tokens, and every token past the answer is time spent
-# inventing something.
-GENERATION = {
-    "number": {"max_new_tokens": 16, "charset": _NUMBER_CHARS},
-    # Not constrained: the invoice-number box contains its printed caption
-    # ("رقم الفاتورة : 00010"), and a digits-only constraint forces the model to
-    # invent digits where the caption is (measured: "٥٠٠١٥" for "00010", at
-    # confidence 0.15). Output validation strips the caption instead.
-    "code": {"max_new_tokens": 24},
-    "date": {"max_new_tokens": 24, "charset": _DATE_CHARS},
-    "arabic_text": {"max_new_tokens": 48, "repetition_penalty": 1.1, "no_repeat_ngram_size": 4},
-    "any": {"max_new_tokens": 64, "repetition_penalty": 1.1, "no_repeat_ngram_size": 4},
-}
+__all__ = ["GENERATION", "MAX_SIDE", "QwenRuntime", "_DATE_CHARS", "_DIGITS", "_NUMBER_CHARS"]
 
 def _bytes_to_unicode() -> dict[int, str]:
     """GPT-2's byte <-> printable-character map, which byte-level BPE vocabularies use.

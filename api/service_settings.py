@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SERVICE_VERSION = "1.0.0"
@@ -56,6 +57,17 @@ class ServiceSettings(BaseSettings):
     # desktop app normally sends a full `configuration` object, but the CLI,
     # the tests and a bare curl all rely on this.
     config_path: str = str(PROJECT_ROOT / "config" / "default_config.yaml")
+
+    @field_validator("config_path")
+    @classmethod
+    def _anchor_config_path(cls, value: str) -> str:
+        """A relative path that does not exist from the current directory is
+        taken relative to the project, so `INVOICE_AI_CONFIG_PATH=config/nuqta_config.yaml`
+        works however the desktop app happens to launch the service."""
+        path = Path(value)
+        if not path.is_absolute() and not path.exists() and (PROJECT_ROOT / path).exists():
+            return str(PROJECT_ROOT / path)
+        return value
 
     default_languages: list[str] = ["ar", "en"]
 

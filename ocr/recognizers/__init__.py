@@ -15,7 +15,13 @@ from ocr.recognizers import echo_recognizer  # noqa: F401  (no dependencies)
 
 logger = logging.getLogger(__name__)
 
-_OPTIONAL_RECOGNIZERS = (("qwen_recognizer", "transformers / torch"),)
+_OPTIONAL_RECOGNIZERS = (
+    ("qwen_recognizer", "transformers / torch"),
+    # Needs only `requests` and Pillow in this process; the model itself runs
+    # in the separately installed llama-server binary, which is looked for
+    # when the recognizer is built, not when it is imported.
+    ("llamacpp_recognizer", "requests"),
+)
 
 for _module_name, _requirement in _OPTIONAL_RECOGNIZERS:
     try:

@@ -59,6 +59,15 @@ Machine-specific values come from the environment, never from a committed path:
 | `INVOICE_AI_CONFIG_PATH` | which YAML the service loads | `config/default_config.yaml` |
 | `INVOICE_AI_API_TOKEN` | require `X-Invoice-AI-Token` | unset |
 | `INVOICE_AI_MAX_LOADED_MODELS` | OCR model configurations kept in memory | `1` |
+| `INVOICE_AI_NUQTA_MODEL` | GGUF language model, `config/nuqta_config.yaml` | `OCR_Models/Nuqta-Arabic-OCR-4B-GGUF/nuqta-ocr-4b-Q4_K_M.gguf` |
+| `INVOICE_AI_NUQTA_MMPROJ` | GGUF vision projector, `config/nuqta_config.yaml` | `OCR_Models/Nuqta-Arabic-OCR-4B-GGUF/nuqta-ocr-4b-mmproj-f16.gguf` |
+| `INVOICE_AI_LLAMA_SERVER` | `llama-server(.exe)`: full path, its folder, or a name on `PATH` | `llama-server` |
+| `INVOICE_AI_LLAMA_GPU_LAYERS` | `auto` (fit to free VRAM), `all`, `0` (CPU), or a layer count | `auto` |
+
+The `ocr` section — including `ocr.recognizer.name: qwen` or `llamacpp` and every
+model path — is server-owned (§3), so the GGUF backend needs **no** change on the C#
+side: the settings page cannot select it, the machine's configuration does. Setup:
+[llamacpp-nuqta-setup.md](llamacpp-nuqta-setup.md).
 
 In YAML, `${NAME:-default}` expands from the environment (`config/loader.py`).
 Relative paths are relative to the project root.

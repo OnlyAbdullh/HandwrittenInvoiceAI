@@ -1,0 +1,102 @@
+# The layout-driven pipeline with the Nuqta Arabic OCR 4B GGUF model, run by
+# llama.cpp. Identical to default_config.yaml except for `ocr.recognizer`:
+# same preprocessing, same grid detection and classification, same prompts,
+# same output validation, same parser and response shape.
+#
+# Use it with the service:
+#     $env:INVOICE_AI_CONFIG_PATH = "config/nuqta_config.yaml"; python -m api.main
+# or from the command line:
+#     python main.py path\to\invoice.jpg config/nuqta_config.yaml
+#
+# Back to the transformers Qwen model: unset INVOICE_AI_CONFIG_PATH (the
+# service then loads default_config.yaml), or pass that file to main.py.
+#
+# Setup -- installing llama.cpp, downloading the two model files, GPU settings,
+# troubleshooting: docs/llamacpp-nuqta-setup.md.
+preprocessing:
+  geometric_steps:
+    - {name: perspective_correction, enabled: true, params: {canny_low: 30, canny_high: 150}}
+    - {name: deskew_hough, enabled: true, params: {hough_threshold: 100, min_line_length: 150, max_line_gap: 10, max_angle_deg: 20}}
+
+  # As in default_config.yaml: the VLM reads grayscale, and blur-divide washes
+  # light-blue ballpoint out (measured with the Qwen model; not yet re-measured
+  # with Nuqta -- the settings page can A/B it).
+  ocr_photometric_steps:
+    - {name: channel_selection, enabled: true, params: {channel: gray}}
+    - {name: illumination_normalization_blur_divide, enabled: false, params: {blur_kernel: 95}}
+    - {name: clahe, enabled: false, params: {clip_limit: 2.0, tile_grid_size: [8, 8]}}
+    - {name: bilateral_filter, enabled: false, params: {d: 5, sigma_color: 50, sigma_space: 50}}
+    - {name: adaptive_threshold, enabled: false, params: {block_size: 51, c: 35}}
+    - {name: morphological_cleanup, enabled: false, params: {operation: open, kernel_size: 2}}
+
+  table_photometric_steps:
+    - {name: channel_selection, enabled: true, params: {channel: gray}}
+    - {name: adaptive_threshold, enabled: true, params: {block_size: 15, c: 10, invert: true}}
+
+flow:
+  name: layout_driven
+
+ocr:
+  cropper:
+    name: padded_crop
+    params: {pad: 10, upscale: 2, min_side: 8, min_ink_ratio: 0.01}
+
+  # Machine-specific values come from the environment, with defaults that work
+  # when the files are placed under OCR_Models/ (git-ignored) and llama-server
+  # is on PATH:
+  #   INVOICE_AI_NUQTA_MODEL       the language model,   nuqta-ocr-4b-Q4_K_M.gguf
+  #   INVOICE_AI_NUQTA_MMPROJ      the vision projector, nuqta-ocr-4b-mmproj-f16.gguf
+  #   INVOICE_AI_LLAMA_SERVER      llama-server(.exe): a full path, its folder, or a name on PATH
+  #   INVOICE_AI_LLAMA_GPU_LAYERS  auto (fit to free VRAM) | all | 0 (CPU only) | a layer count
+  recognizer:
+    name: llamacpp
+    params:
+      model_path: "${INVOICE_AI_NUQTA_MODEL:-OCR_Models/Nuqta-Arabic-OCR-4B-GGUF/nuqta-ocr-4b-Q4_K_M.gguf}"
+      mmproj_path: "${INVOICE_AI_NUQTA_MMPROJ:-OCR_Models/Nuqta-Arabic-OCR-4B-GGUF/nuqta-ocr-4b-mmproj-f16.gguf}"
+      server_path: "${INVOICE_AI_LLAMA_SERVER:-llama-server}"
+      gpu_layers: "${INVOICE_AI_LLAMA_GPU_LAYERS:-auto}"
+      # Keeps the vision encoder on the GPU when it fits; false frees its VRAM
+      # for language-model layers at the cost of slower image encoding.
+      mmproj_offload: true
+      # Small cell crops are enlarged to at least this many image tokens, as the
+      # Hugging Face Qwen-VL processor does for the transformers backend.
+      image_min_tokens: 64
+      # Ample for one cell: a 768px crop is a few hundred image tokens.
+      ctx_size: 4096
+      max_new_tokens: 64
+      timeout_s: 120
+      startup_timeout_s: 600
+      default_kind: any
+
+table_extraction:
+  extractor: contour_based
+  extractor_params: {}
+  classifier: bill_layout
+  classifier_params:
+    table_row_count: 10
+    table_col_count: 6
+    # Left to right, as the columns of this RTL form appear in pixel order.
+    column_roles: [notes, line_total, unit_price, quantity, product_name, line_number]
+    profiles:
+      - profile_name: form_b_bilingual     # 4 columns, 15 rows, header band not ruled
+        table_row_count: 15
+        table_col_count: 4
+        column_roles: [unit_price, quantity, product_name, line_total]
+        header_roles: []
+        footer_roles: [total_amount, label]
+        printed_header_row: false
+        footer_from_below: true
+        ragged_row_slack: 1
+
+string_matching:
+  algorithm: levenshtein
+  algorithm_params: {max_distance: 2}
+  dictionary_path: "keywords/ar_invoice_terms.json"
+
+output:
+  formatter: invoice_json
+  formatter_params: {}
+
+persistence:
+  store: file_result_store
+  store_params: {output_dir: "results/"}

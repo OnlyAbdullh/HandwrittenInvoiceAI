@@ -11,7 +11,12 @@ fastapi>=0.115
 uvicorn[standard]>=0.34
 pydantic-settings>=2.7
 python-multipart>=0.0.20
-requests>=2.31          # only the `http` recognizer backend uses it
+requests>=2.31          # the `llamacpp` recognizer, and the qwen `http` backend
+
+# --- llama.cpp OCR backend ---------------------------------------------
+# Nothing to pip install: the `llamacpp` recognizer drives a separately
+# installed llama-server binary (`winget install llama.cpp`) -- see
+# docs/llamacpp-nuqta-setup.md.
 
 # --- light OCR engine ----------------------------------------------------
 # Tesseract needs the binary plus its `ara` and `eng` traineddata, which pip
