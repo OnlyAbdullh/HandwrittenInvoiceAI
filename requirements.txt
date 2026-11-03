@@ -1,0 +1,26 @@
+# --- core pipeline -------------------------------------------------------
+pydantic>=2.0
+PyYAML>=6.0
+numpy>=1.24
+opencv-python>=4.8
+Pillow>=10.0
+
+# --- HTTP service --------------------------------------------------------
+# The desktop app talks to `api.main:app`; see docs/api-contract.md.
+fastapi>=0.115
+uvicorn[standard]>=0.34
+pydantic-settings>=2.7
+python-multipart>=0.0.20
+requests>=2.31          # only the `http` recognizer backend uses it
+
+# --- light OCR engine ----------------------------------------------------
+# Tesseract needs the binary plus its `ara` and `eng` traineddata, which pip
+# cannot install -- see README.md.
+pytesseract>=0.3.13
+
+# Heavier engines and optional features live in their own files, so a machine
+# that needs none of them installs none of them:
+#   requirements-surya.txt     Surya detector/engine (detector_driven flow)
+#   requirements-vlm.txt       the Qwen worker's virtualenv (layout_driven flow)
+#   requirements-optional.txt  HEIC and PDF uploads
+#   requirements-dev.txt       tests

@@ -1,0 +1,15 @@
+# The Qwen VLM worker's virtualenv (tools/qwen_worker.py), the default reader of
+# the `layout_driven` flow. Separate from the service's virtualenv because
+# Qwen3.5 needs transformers>=5 while surya-ocr pins <5.
+#
+#   python -m venv qwen_venv
+#   qwen_venv/Scripts/pip install -r requirements-vlm.txt
+#   (or any venv: point INVOICE_AI_VLM_PYTHON at its python.exe)
+#
+# Install the torch build for your hardware first (CUDA or CPU) -- see
+# https://pytorch.org/get-started/locally/ -- then:
+torch
+transformers>=5.0
+accelerate
+Pillow>=10.0
+qwen-vl-utils

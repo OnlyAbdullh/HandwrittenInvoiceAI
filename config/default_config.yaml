@@ -1,0 +1,131 @@
+preprocessing:
+  # Available strategies per family -- swap `name:` below to switch:
+  #   deskew:                deskew_hough | deskew_min_area_rect (not implemented, raises NotImplementedStrategyError)
+  #   illumination:           illumination_normalization_blur_divide | illumination_normalization_blackhat (not implemented)
+  #   contrast enhancement:  clahe | plain_equalization
+  #   denoise:                bilateral_filter | median_blur | gaussian_blur | nlm_denoise
+  #   thresholding:           adaptive_threshold | otsu_threshold | fixed_threshold
+  #   morphology:             single step, switch via params.operation: open | close | erode | dilate
+
+  # Runs once. Output is the single image shown on both sides of the UI.
+  geometric_steps:
+    - {name: perspective_correction, enabled: true, params: {canny_low: 30, canny_high: 150}}
+    - {name: deskew_hough, enabled: true, params: {hough_threshold: 100, min_line_length: 150, max_line_gap: 10, max_angle_deg: 20}}
+
+  # Everything after illumination normalization is deliberately OFF: the Qwen
+  # recognizer reads a grayscale crop far better than a binarized one, and
+  # thresholding a handwritten stroke is what breaks it into pieces. The steps
+  # stay listed with their parameters so the settings page has something to
+  # render and switching one back on is a toggle, not an edit.
+  #
+  # `illumination_normalization_blur_divide` is now OFF. Measured on bills/sahror
+  # through the service: with it on, a clean row (6 x 200 = 1200) came back as
+  # 51 x 50 = 120; with it off the same row reads correctly. Before that, it was
+  # the first thing to try when a handwritten field read badly. Measured on
+  # images/test1.jpg, date cell (805, 462, 443, 158), same model and prompt, the
+  # only variable being which image the crop came from:
+  #
+  #     corrected page   ->  'التاريخ : ٧ / ٨ / ٢٠٢٦'   correct
+  #     after blur-divide->  'التاريخ : /٨/ ٧)'          day and year destroyed
+  #
+  # Blur-divide flattens the page against a blurred copy of itself, which makes
+  # dark print pop and washes light blue ballpoint out to a pale grey the model
+  # then drops components of. It was tuned for a binarizing engine reading
+  # printed text; this pipeline feeds a VLM reading grayscale directly. The
+  # printed caption in the same cell survived it either way, which is why the
+  # damage is easy to miss -- the field looks read, just wrong.
+  #
+  # Not switched off here because that was measured per cell, not across a whole
+  # invoice, and the step exists for the phone-photo shadows this product is
+  # full of. It is one `enabled:` flag, and the settings page exposes it, so it
+  # can be A/B'd on a real batch without a rebuild.
+  ocr_photometric_steps:
+    - {name: channel_selection, enabled: true, params: {channel: gray}}
+    - {name: illumination_normalization_blur_divide, enabled: false, params: {blur_kernel: 95}}
+    - {name: clahe, enabled: false, params: {clip_limit: 2.0, tile_grid_size: [8, 8]}}
+    - {name: bilateral_filter, enabled: false, params: {d: 5, sigma_color: 50, sigma_space: 50}}
+    - {name: adaptive_threshold, enabled: false, params: {block_size: 51, c: 35}}
+    - {name: morphological_cleanup, enabled: false, params: {operation: open, kernel_size: 2}}
+
+  table_photometric_steps:
+    - {name: channel_selection, enabled: true, params: {channel: gray}}
+    # invert: the table extractors reconstruct the grid by eroding the FOREGROUND,
+    # so they need ink at 255. Without it they get an ink-at-0 image and
+    # reconstruct the paper instead of the rules.
+    - {name: adaptive_threshold, enabled: true, params: {block_size: 15, c: 10, invert: true}}
+
+# Layout first: the printed grid is detected and classified, then every labelled
+# cell is cropped and read with the prompt its role implies. No text detector
+# runs. This is the configuration that actually works on this project's
+# handwritten invoices -- `single_engine` + `tesseract` was the default before,
+# and Tesseract is a separate binary install that reads this handwriting poorly.
+# See orchestration/flows/layout_driven.py.
+flow:
+  name: layout_driven
+
+ocr:
+  cropper:
+    name: padded_crop
+    # min_ink_ratio: a cell with less than this fraction of ink pixels is blank
+    # and is never sent to the model. Without it the VLM "read" every empty row
+    # of the printed form and invented six line items on a four-line invoice.
+    params: {pad: 10, upscale: 2, min_side: 8, min_ink_ratio: 0.01}
+
+  # Machine-specific paths come from the environment, with project-relative
+  # defaults (see README "Installing the VLM worker"):
+  #   INVOICE_AI_VLM_PYTHON  python.exe of the venv built from requirements-vlm.txt
+  #   INVOICE_AI_MODEL_DIR   model directory (the architecture is auto-detected)
+  recognizer:
+    name: qwen
+    params:
+      backend: subprocess
+      worker_python: "${INVOICE_AI_VLM_PYTHON:-qwen_venv/Scripts/python.exe}"
+      worker_script: "tools/qwen_worker.py"
+      model_path: "${INVOICE_AI_MODEL_DIR:-OCR_Models/Arabic-Qwen3.5-OCR-v4}"
+      max_new_tokens: 64
+      batch_size: 4
+      timeout_s: 120
+      default_kind: any
+
+table_extraction:
+  # The grid supplies the column boundaries, measured on each photograph, so
+  # nothing has to be declared -- and nothing can be wrong when a page is
+  # cropped differently.
+  extractor: contour_based
+  extractor_params: {}
+  classifier: bill_layout
+  classifier_params:
+    table_row_count: 10
+    table_col_count: 6
+    # Left to right, as the columns of this RTL form appear in pixel order.
+    column_roles: [notes, line_total, unit_price, quantity, product_name, line_number]
+    # Other printed forms. The page is labelled by the profile whose column count
+    # fits its detected grid; form A (above) is the primary and the fallback.
+    profiles:
+      - profile_name: form_b_bilingual     # 4 columns, 15 rows, header band not ruled
+        table_row_count: 15
+        table_col_count: 4
+        column_roles: [unit_price, quantity, product_name, line_total]
+        header_roles: []
+        footer_roles: [total_amount, label]
+        printed_header_row: false
+        footer_from_below: true
+        ragged_row_slack: 1
+
+string_matching:
+  algorithm: levenshtein
+  algorithm_params: {max_distance: 2}
+  dictionary_path: "keywords/ar_invoice_terms.json"
+
+output:
+  # The shape the desktop app binds to, one named key per invoice field. The
+  # HTTP layer forces this one anyway -- it IS the documented response shape --
+  # so the CLI printing something else would just be a second thing to reason
+  # about. `ui_overlay_json` is still registered for the lossless box-by-box
+  # view; `results/<id>/result.json` carries that view regardless of formatter.
+  formatter: invoice_json
+  formatter_params: {}
+
+persistence:
+  store: file_result_store
+  store_params: {output_dir: "results/"}

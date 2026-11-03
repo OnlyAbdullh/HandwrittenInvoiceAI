@@ -1,0 +1,85 @@
+# The layout-driven Qwen pipeline for command-line runs (main.py, run_batch.py,
+# tools/evaluate.py). Identical to default_config.yaml except the output
+# formatter: `ui_overlay_json` is the lossless box-by-box view a person wants
+# when diagnosing a page. Machine-specific paths come from the environment; see
+# the comments in default_config.yaml.
+preprocessing:
+  geometric_steps:
+    - {name: perspective_correction, enabled: true, params: {canny_low: 30, canny_high: 150}}
+    - {name: deskew_hough, enabled: true, params: {hough_threshold: 100, min_line_length: 150, max_line_gap: 10, max_angle_deg: 20}}
+
+  # Blur-divide is off: it washes light-blue ballpoint out to pale grey, and on
+  # bills/sahror it removed the day from the handwritten date (see the
+  # measurement in default_config.yaml). The VLM reads grayscale directly.
+  ocr_photometric_steps:
+    - {name: channel_selection, enabled: true, params: {channel: gray}}
+    - {name: illumination_normalization_blur_divide, enabled: false, params: {blur_kernel: 95}}
+    - {name: clahe, enabled: false, params: {clip_limit: 2.0, tile_grid_size: [8, 8]}}
+    - {name: bilateral_filter, enabled: false, params: {d: 5, sigma_color: 50, sigma_space: 50}}
+    - {name: adaptive_threshold, enabled: false, params: {block_size: 51, c: 35}}
+    - {name: morphological_cleanup, enabled: false, params: {operation: open, kernel_size: 2}}
+
+  # The table branch feeds the cell detector, which reconstructs the grid by
+  # eroding and dilating the FOREGROUND -- so it needs ink at 255, not the
+  # ink-at-0 an OCR engine wants. That is what `invert: true` is for.
+  table_photometric_steps:
+    - {name: channel_selection, enabled: true, params: {channel: gray}}
+    - {name: adaptive_threshold, enabled: true, params: {block_size: 15, c: 10, invert: true}}
+
+# Layout first: the printed grid is detected and classified, then every labelled
+# cell is cropped and read with the prompt its role implies. No text detector
+# runs. See orchestration/flows/layout_driven.py.
+flow:
+  name: layout_driven
+
+ocr:
+  cropper:
+    name: padded_crop
+    params: {pad: 10, upscale: 2, min_side: 8, min_ink_ratio: 0.01}
+
+  recognizer:
+    name: qwen
+    params:
+      backend: subprocess
+      worker_python: "${INVOICE_AI_VLM_PYTHON:-qwen_venv/Scripts/python.exe}"
+      worker_script: "tools/qwen_worker.py"
+      model_path: "${INVOICE_AI_MODEL_DIR:-OCR_Models/Arabic-Qwen3.5-OCR-v4}"
+      max_new_tokens: 64
+      batch_size: 4
+      timeout_s: 120
+      default_kind: any
+
+table_extraction:
+  extractor: contour_based
+  extractor_params: {}
+  classifier: bill_layout
+  classifier_params:
+    table_row_count: 10
+    table_col_count: 6
+    # Left to right, as the columns of this RTL form appear in pixel order.
+    column_roles: [notes, line_total, unit_price, quantity, product_name, line_number]
+    # Other printed forms. The page is labelled by the profile whose column count
+    # fits its detected grid; form A (above) is the primary and the fallback.
+    profiles:
+      - profile_name: form_b_bilingual     # 4 columns, 15 rows, header band not ruled
+        table_row_count: 15
+        table_col_count: 4
+        column_roles: [unit_price, quantity, product_name, line_total]
+        header_roles: []
+        footer_roles: [total_amount, label]
+        printed_header_row: false
+        footer_from_below: true
+        ragged_row_slack: 1
+
+string_matching:
+  algorithm: levenshtein
+  algorithm_params: {max_distance: 2}
+  dictionary_path: "keywords/ar_invoice_terms.json"
+
+output:
+  formatter: ui_overlay_json
+  formatter_params: {}
+
+persistence:
+  store: file_result_store
+  store_params: {output_dir: "results/"}

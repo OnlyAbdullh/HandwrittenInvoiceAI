@@ -1,0 +1,5 @@
+# Optional input formats. Without them HEIC / PDF uploads are refused with a
+# message naming the missing package.
+pillow-heif>=0.16     # iPhone photos (.heic, .heif)
+pypdfium2>=4.30       # PDF (first page by default)
+matplotlib>=3.7       # threshold-step histogram in debug output only

@@ -1,0 +1,29 @@
+{
+ "keywords": [
+  "رقم الفاتورة",
+  "الاسم",
+  "التاريخ",
+  "المدينة",
+  "اسم المنتج",
+  "العدد",
+  "السعر الإفرادي",
+  "السعر الإجمالي",
+  "ملاحظات",
+  "كتابة",
+  "رقما",
+  "المجموع",
+  "فقط لا غير",
+  "القيمة الإجمالية",
+  "البيان",
+  "الكمية",
+  "السعر",
+  "الختم والتوقيع",
+  "التوقيع والختم",
+  "المطلوب من السيد",
+  "Price",
+  "Quantity",
+  "Description",
+  "Total"
+ ],
+ "_comment": "Printed caption vocabulary of forms A and B. Used by the keyword-correction stage, which feeds the ui_overlay view and the heuristic header path -- not the /extract response."
+}

@@ -1,0 +1,6 @@
+# The Surya text detector / engine (the `detector_driven` flow and the `surya`
+# engine). Pins transformers<5, which is why the Qwen VLM cannot share this
+# virtualenv -- see requirements-vlm.txt.
+-r requirements.txt
+surya-ocr==0.17.1
+transformers<5.0

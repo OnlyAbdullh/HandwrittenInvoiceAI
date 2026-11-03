@@ -1,0 +1,17 @@
+{
+  "image": "onlyone/img.png",
+  "form": "form_b_bilingual",
+  "invoice_number": "0001901",
+  "customer_name": "أبو جمال طبيخ",
+  "date": "2026-08-07",
+  "city": null,
+  "total": 214812.05,
+  "items": [
+    {"product_name": "باراشوت ملون", "quantity": 16, "unit_price": 13250, "total_price": 212000},
+    {"product_name": "بنطلون كتان كبير", "quantity": 6, "unit_price": 200, "total_price": 1200},
+    {"product_name": "بوري وسط لاكوست", "quantity": 192, "unit_price": 5.70, "total_price": 1094.40},
+    {"product_name": "بوري شبابي زارا", "quantity": 87, "unit_price": 5.95, "total_price": 517.65}
+  ],
+  "labelled_by": "transcribed by eye from the photograph",
+  "notes": "The same transaction as sahror on a different printed form. The form has no city box. The invoice number is printed in red, not handwritten. The customer name is handwriting and should be confirmed by someone who knows the account."
+}

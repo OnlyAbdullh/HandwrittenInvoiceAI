@@ -1,0 +1,713 @@
+{
+ "invoice_id": {
+  "value": "00010",
+  "ocr_confidence": 0.5,
+  "bounding_box": {
+   "x": 132,
+   "y": 88,
+   "w": 285,
+   "h": 143
+  }
+ },
+ "customer_name": {
+  "bounding_box": {
+   "x": 815,
+   "y": 286,
+   "w": 449,
+   "h": 112
+  },
+  "ocr_confidence": 0.5,
+  "original_value": "حسام الارديني",
+  "results": [
+   {
+    "id": "1",
+    "value": "حسام المارديني",
+    "string_matching_score": 0.9286
+   },
+   {
+    "id": "2",
+    "value": "أبو جمال طبيخ",
+    "string_matching_score": 0.1538
+   }
+  ]
+ },
+ "date": {
+  "value": null,
+  "ocr_confidence": 0.5,
+  "bounding_box": {
+   "x": 514,
+   "y": 297,
+   "w": 284,
+   "h": 101
+  }
+ },
+ "city": {
+  "bounding_box": {
+   "x": 126,
+   "y": 298,
+   "w": 369,
+   "h": 103
+  },
+  "ocr_confidence": 0.5,
+  "original_value": "ريف حسق",
+  "results": [
+   {
+    "id": null,
+    "value": "ريف دمشق",
+    "string_matching_score": 0.625
+   },
+   {
+    "id": null,
+    "value": "دمشق",
+    "string_matching_score": 0.1429
+   }
+  ]
+ },
+ "products": [
+  {
+   "product_name": {
+    "bounding_box": {
+     "x": 895,
+     "y": 530,
+     "w": 327,
+     "h": 83
+    },
+    "ocr_confidence": 0.5,
+    "original_value": "جا راننوت ملون",
+    "results": [
+     {
+      "id": "0",
+      "value": "باراشوت ملون",
+      "string_matching_score": 0.5238
+     },
+     {
+      "id": "1",
+      "value": "بنطلون كتان كبير",
+      "string_matching_score": 0.3056
+     },
+     {
+      "id": "2",
+      "value": "بوري وسط لاكوست",
+      "string_matching_score": 0.2222
+     },
+     {
+      "id": "3",
+      "value": "بوري شبابي زارا",
+      "string_matching_score": 0.1389
+     }
+    ]
+   },
+   "quantity": {
+    "value": 16,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 767,
+     "y": 533,
+     "w": 127,
+     "h": 80
+    }
+   },
+   "unit_price": {
+    "value": 14580.0,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 559,
+     "y": 535,
+     "w": 207,
+     "h": 80
+    }
+   },
+   "total_price": {
+    "value": null,
+    "ocr_confidence": 0.0,
+    "bounding_box": {
+     "x": 356,
+     "y": 536,
+     "w": 202,
+     "h": 80
+    }
+   }
+  },
+  {
+   "product_name": {
+    "bounding_box": {
+     "x": 896,
+     "y": 611,
+     "w": 329,
+     "h": 84
+    },
+    "ocr_confidence": 0.5,
+    "original_value": "بنطلون كمان كبير",
+    "results": [
+     {
+      "id": "1",
+      "value": "بنطلون كتان كبير",
+      "string_matching_score": 0.9167
+     },
+     {
+      "id": "0",
+      "value": "باراشوت ملون",
+      "string_matching_score": 0.2976
+     },
+     {
+      "id": "3",
+      "value": "بوري شبابي زارا",
+      "string_matching_score": 0.2056
+     },
+     {
+      "id": "2",
+      "value": "بوري وسط لاكوست",
+      "string_matching_score": 0.1944
+     }
+    ]
+   },
+   "quantity": {
+    "value": 5,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 767,
+     "y": 614,
+     "w": 128,
+     "h": 81
+    }
+   },
+   "unit_price": {
+    "value": null,
+    "ocr_confidence": 0.0,
+    "bounding_box": {
+     "x": 558,
+     "y": 615,
+     "w": 208,
+     "h": 81
+    }
+   },
+   "total_price": {
+    "value": 120.0,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 354,
+     "y": 616,
+     "w": 203,
+     "h": 82
+    }
+   }
+  },
+  {
+   "product_name": {
+    "bounding_box": {
+     "x": 896,
+     "y": 693,
+     "w": 331,
+     "h": 85
+    },
+    "ocr_confidence": 0.5,
+    "original_value": "بوري وميط لاكوست",
+    "results": [
+     {
+      "id": "2",
+      "value": "بوري وسط لاكوست",
+      "string_matching_score": 0.8333
+     },
+     {
+      "id": "3",
+      "value": "بوري شبابي زارا",
+      "string_matching_score": 0.4722
+     },
+     {
+      "id": "1",
+      "value": "بنطلون كتان كبير",
+      "string_matching_score": 0.2222
+     },
+     {
+      "id": "0",
+      "value": "باراشوت ملون",
+      "string_matching_score": 0.1905
+     }
+    ]
+   },
+   "quantity": {
+    "value": 192,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 768,
+     "y": 696,
+     "w": 127,
+     "h": 82
+    }
+   },
+   "unit_price": {
+    "value": 517.0,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 558,
+     "y": 696,
+     "w": 208,
+     "h": 82
+    }
+   },
+   "total_price": {
+    "value": 109414.0,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 353,
+     "y": 697,
+     "w": 204,
+     "h": 83
+    }
+   }
+  },
+  {
+   "product_name": {
+    "bounding_box": {
+     "x": 897,
+     "y": 775,
+     "w": 333,
+     "h": 86
+    },
+    "ocr_confidence": 0.5,
+    "original_value": "جوري مشباني زرار",
+    "results": [
+     {
+      "id": "3",
+      "value": "بوري شبابي زارا",
+      "string_matching_score": 0.6389
+     },
+     {
+      "id": "2",
+      "value": "بوري وسط لاكوست",
+      "string_matching_score": 0.3611
+     },
+     {
+      "id": "0",
+      "value": "باراشوت ملون",
+      "string_matching_score": 0.254
+     },
+     {
+      "id": "1",
+      "value": "بنطلون كتان كبير",
+      "string_matching_score": 0.1944
+     }
+    ]
+   },
+   "quantity": {
+    "value": 87,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 768,
+     "y": 779,
+     "w": 128,
+     "h": 82
+    }
+   },
+   "unit_price": {
+    "value": 5.95,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 557,
+     "y": 778,
+     "w": 210,
+     "h": 83
+    }
+   },
+   "total_price": {
+    "value": 517.65,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 351,
+     "y": 779,
+     "w": 205,
+     "h": 82
+    }
+   }
+  },
+  {
+   "product_name": {
+    "bounding_box": {
+     "x": 898,
+     "y": 857,
+     "w": 336,
+     "h": 87
+    },
+    "ocr_confidence": 0.5,
+    "original_value": "الخوري بولس جبرائيل",
+    "results": [
+     {
+      "id": "3",
+      "value": "بوري شبابي زارا",
+      "string_matching_score": 0.4762
+     },
+     {
+      "id": "2",
+      "value": "بوري وسط لاكوست",
+      "string_matching_score": 0.4286
+     },
+     {
+      "id": "1",
+      "value": "بنطلون كتان كبير",
+      "string_matching_score": 0.2619
+     },
+     {
+      "id": "0",
+      "value": "باراشوت ملون",
+      "string_matching_score": 0.254
+     }
+    ]
+   },
+   "quantity": {
+    "value": 12,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 768,
+     "y": 862,
+     "w": 130,
+     "h": 83
+    }
+   },
+   "unit_price": {
+    "value": null,
+    "ocr_confidence": 0.0,
+    "bounding_box": {
+     "x": 557,
+     "y": 860,
+     "w": 210,
+     "h": 84
+    }
+   },
+   "total_price": {
+    "value": null,
+    "ocr_confidence": 0.0,
+    "bounding_box": {
+     "x": 349,
+     "y": 860,
+     "w": 207,
+     "h": 83
+    }
+   }
+  },
+  {
+   "product_name": {
+    "bounding_box": {
+     "x": 899,
+     "y": 940,
+     "w": 337,
+     "h": 88
+    },
+    "ocr_confidence": 0.5,
+    "original_value": "أصواتهم فينزلون على الأرض بكمثارٍ غريبً",
+    "results": [
+     {
+      "id": "1",
+      "value": "بنطلون كتان كبير",
+      "string_matching_score": 0.2913
+     },
+     {
+      "id": "0",
+      "value": "باراشوت ملون",
+      "string_matching_score": 0.2361
+     },
+     {
+      "id": "3",
+      "value": "بوري شبابي زارا",
+      "string_matching_score": 0.2254
+     },
+     {
+      "id": "2",
+      "value": "بوري وسط لاكوست",
+      "string_matching_score": 0.1921
+     }
+    ]
+   },
+   "quantity": {
+    "value": 12,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 769,
+     "y": 945,
+     "w": 130,
+     "h": 84
+    }
+   },
+   "unit_price": {
+    "value": 1.0,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 556,
+     "y": 944,
+     "w": 212,
+     "h": 84
+    }
+   },
+   "total_price": {
+    "value": 12.0,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 348,
+     "y": 944,
+     "w": 207,
+     "h": 84
+    }
+   }
+  },
+  {
+   "product_name": {
+    "bounding_box": {
+     "x": 901,
+     "y": 1025,
+     "w": 338,
+     "h": 88
+    },
+    "ocr_confidence": 0.5,
+    "original_value": "وهو نائم  بكلمات لا أفهمها مثل انقض بغـلس له الضابط لزمتك. سألت راجح هل بلغ أصحابنا ظ ع ك",
+    "results": [
+     {
+      "id": "0",
+      "value": "باراشوت ملون",
+      "string_matching_score": 0.1704
+     },
+     {
+      "id": "1",
+      "value": "بنطلون كتان كبير",
+      "string_matching_score": 0.1642
+     },
+     {
+      "id": "3",
+      "value": "بوري شبابي زارا",
+      "string_matching_score": 0.1528
+     },
+     {
+      "id": "2",
+      "value": "بوري وسط لاكوست",
+      "string_matching_score": 0.1491
+     }
+    ]
+   },
+   "quantity": {
+    "value": 12,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 770,
+     "y": 1029,
+     "w": 130,
+     "h": 84
+    }
+   },
+   "unit_price": {
+    "value": null,
+    "ocr_confidence": 0.0,
+    "bounding_box": {
+     "x": 556,
+     "y": 1028,
+     "w": 212,
+     "h": 85
+    }
+   },
+   "total_price": {
+    "value": null,
+    "ocr_confidence": 0.0,
+    "bounding_box": {
+     "x": 346,
+     "y": 1029,
+     "w": 209,
+     "h": 84
+    }
+   }
+  },
+  {
+   "product_name": {
+    "bounding_box": {
+     "x": 902,
+     "y": 1111,
+     "w": 340,
+     "h": 88
+    },
+    "ocr_confidence": 0.5,
+    "original_value": "١٠",
+    "results": [
+     {
+      "id": "0",
+      "value": "باراشوت ملون",
+      "string_matching_score": 0.0
+     },
+     {
+      "id": "1",
+      "value": "بنطلون كتان كبير",
+      "string_matching_score": 0.0
+     },
+     {
+      "id": "2",
+      "value": "بوري وسط لاكوست",
+      "string_matching_score": 0.0
+     },
+     {
+      "id": "3",
+      "value": "بوري شبابي زارا",
+      "string_matching_score": 0.0
+     }
+    ]
+   },
+   "quantity": {
+    "value": 12,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 770,
+     "y": 1114,
+     "w": 132,
+     "h": 84
+    }
+   },
+   "unit_price": {
+    "value": 12.0,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 555,
+     "y": 1113,
+     "w": 214,
+     "h": 86
+    }
+   },
+   "total_price": {
+    "value": 144.0,
+    "ocr_confidence": 0.0,
+    "bounding_box": {
+     "x": 345,
+     "y": 1114,
+     "w": 209,
+     "h": 86
+    }
+   }
+  },
+  {
+   "product_name": {
+    "bounding_box": {
+     "x": 904,
+     "y": 1199,
+     "w": 341,
+     "h": 87
+    },
+    "ocr_confidence": 0.5,
+    "original_value": "أفكارك في جريدتي",
+    "results": [
+     {
+      "id": "3",
+      "value": "بوري شبابي زارا",
+      "string_matching_score": 0.25
+     },
+     {
+      "id": "1",
+      "value": "بنطلون كتان كبير",
+      "string_matching_score": 0.1944
+     },
+     {
+      "id": "2",
+      "value": "بوري وسط لاكوست",
+      "string_matching_score": 0.1944
+     },
+     {
+      "id": "0",
+      "value": "باراشوت ملون",
+      "string_matching_score": 0.0952
+     }
+    ]
+   },
+   "quantity": {
+    "value": 12,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 771,
+     "y": 1199,
+     "w": 132,
+     "h": 86
+    }
+   },
+   "unit_price": {
+    "value": 2015.0,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 554,
+     "y": 1199,
+     "w": 216,
+     "h": 87
+    }
+   },
+   "total_price": {
+    "value": 24180.0,
+    "ocr_confidence": 0.0,
+    "bounding_box": {
+     "x": 343,
+     "y": 1200,
+     "w": 210,
+     "h": 87
+    }
+   }
+  },
+  {
+   "product_name": {
+    "bounding_box": {
+     "x": 905,
+     "y": 1287,
+     "w": 343,
+     "h": 87
+    },
+    "ocr_confidence": 0.5,
+    "original_value": "...</quote>",
+    "results": [
+     {
+      "id": "0",
+      "value": "باراشوت ملون",
+      "string_matching_score": 0.0
+     },
+     {
+      "id": "1",
+      "value": "بنطلون كتان كبير",
+      "string_matching_score": 0.0
+     },
+     {
+      "id": "2",
+      "value": "بوري وسط لاكوست",
+      "string_matching_score": 0.0
+     },
+     {
+      "id": "3",
+      "value": "بوري شبابي زارا",
+      "string_matching_score": 0.0
+     }
+    ]
+   },
+   "quantity": {
+    "value": null,
+    "ocr_confidence": 0.0,
+    "bounding_box": {
+     "x": 771,
+     "y": 1286,
+     "w": 134,
+     "h": 87
+    }
+   },
+   "unit_price": {
+    "value": 12.0,
+    "ocr_confidence": 0.5,
+    "bounding_box": {
+     "x": 554,
+     "y": 1286,
+     "w": 216,
+     "h": 88
+    }
+   },
+   "total_price": {
+    "value": null,
+    "ocr_confidence": 0.0,
+    "bounding_box": {
+     "x": 342,
+     "y": 1287,
+     "w": 211,
+     "h": 88
+    }
+   }
+  }
+ ],
+ "total_invoice_price": {
+  "value": null,
+  "ocr_confidence": 0.0,
+  "bounding_box": null
+ }
+}
