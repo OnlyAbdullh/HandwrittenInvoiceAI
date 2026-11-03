@@ -50,6 +50,8 @@ _WANTED = (
     "clip.has_vision_encoder",
     "clip.projector_type",
     "clip.vision.projector_type",
+    "clip.vision.image_min_pixels",
+    "clip.vision.image_max_pixels",
 )
 
 # A sanity bound on any one string. Metadata strings are names and templates;
@@ -78,6 +80,16 @@ class GGUFInfo:
         return self.metadata.get("clip.projector_type") or self.metadata.get(
             "clip.vision.projector_type"
         )
+
+    @property
+    def image_min_pixels(self) -> int | None:
+        """The smallest image the projector's model was set up to read, if it says.
+
+        A model that declares one (Nuqta's mmproj asks for about 1 megapixel)
+        should be fed at that size; llama.cpp applies it unless told otherwise.
+        """
+        value = self.metadata.get("clip.vision.image_min_pixels")
+        return int(value) if value else None
 
     @property
     def has_vision_encoder(self) -> bool | None:
@@ -139,11 +151,9 @@ def _identified(metadata: dict) -> bool:
     architecture = metadata.get("general.architecture")
     if architecture is None or "general.name" not in metadata:
         return False
-    if architecture != PROJECTOR_ARCHITECTURE:
-        return True
-    return "clip.has_vision_encoder" in metadata and (
-        "clip.projector_type" in metadata or "clip.vision.projector_type" in metadata
-    )
+    # A projector's metadata is small and its image-size keys can come anywhere
+    # in it, so it is always read to the end.
+    return architecture != PROJECTOR_ARCHITECTURE
 
 
 def read_gguf_info(path: str | Path) -> GGUFInfo:

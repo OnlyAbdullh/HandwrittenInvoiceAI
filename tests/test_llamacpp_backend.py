@@ -527,3 +527,42 @@ class TestRecognizer:
         recognizer = make_recognizer(prompts={"number": "اكتب الرقم فقط"})
         recognizer.read(crop(ContentKind.NUMBER))
         assert completions(record)[0]["prompt"] == ["اكتب الرقم فقط"]
+
+
+class TestModelCardSettings:
+    """Nuqta's model card: its own image size, no repeat penalty, its own prompt."""
+
+    def _argv(self, record):
+        return [e for e in read_record(record) if e["event"] == "launch"][-1]["argv"]
+
+    def test_auto_respects_the_image_size_the_projector_declares(self, make_recognizer, tmp_path, record):
+        declared = write_projector(tmp_path / "declares-mmproj.gguf", min_pixels=1_000_000)
+        make_recognizer(mmproj_path=str(declared))
+        # Nothing passed: llama.cpp then applies the projector's own ~1 MP floor.
+        assert "--image-min-tokens" not in self._argv(record)
+
+    def test_auto_falls_back_to_the_hf_floor_when_the_projector_says_nothing(self, make_recognizer, record):
+        make_recognizer()
+        argv = self._argv(record)
+        assert argv[argv.index("--image-min-tokens") + 1] == "64"
+
+    @pytest.mark.parametrize("setting, expected", [(256, "256"), (None, None)])
+    def test_an_explicit_setting_wins(self, make_recognizer, record, setting, expected):
+        make_recognizer(image_min_tokens=setting)
+        argv = self._argv(record)
+        assert (argv[argv.index("--image-min-tokens") + 1] if "--image-min-tokens" in argv else None) == expected
+
+    def test_a_bad_image_size_is_refused(self, make_recognizer):
+        with pytest.raises(ValueError, match="image_min_tokens"):
+            make_recognizer(image_min_tokens="big")
+
+    def test_the_repeat_penalty_override_applies_to_every_kind(self, make_recognizer, record):
+        recognizer = make_recognizer(repetition_penalty=1.0)
+        recognizer.read_all([crop(ContentKind.NUMBER, 1), crop(ContentKind.ARABIC_TEXT, 2)])
+        assert [c["body"]["repeat_penalty"] for c in completions(record)] == [1.0, 1.0]
+
+    def test_the_gguf_header_reports_the_declared_floor(self, tmp_path):
+        from ocr.llamacpp.gguf import read_gguf_info
+
+        assert read_gguf_info(write_projector(tmp_path / "a.gguf", min_pixels=1_000_000)).image_min_pixels == 1_000_000
+        assert read_gguf_info(write_projector(tmp_path / "b.gguf")).image_min_pixels is None

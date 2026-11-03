@@ -65,9 +65,13 @@ def answer_for(body: dict) -> str:
     grammar = body.get("grammar") or ""
     if grammar:
         return "7/8/2026" if '"/"' in grammar else "١٢"
-    if "رقم الفاتورة" in text:
+    # Without a grammar the kind shows in the prompt (the Qwen prompts name it)
+    # or, when every kind shares one prompt (Nuqta's), in the token budget the
+    # shared decoding policy gives it: code 24, arabic_text 48, any 64.
+    budget = body.get("max_tokens")
+    if "رقم الفاتورة" in text or budget == 24:
         return "رقم الفاتورة : 00010"
-    if "وصف منتج" in text:
+    if "وصف منتج" in text or budget == 48:
         return "بوري شبابي زارا"
     return "نص"
 

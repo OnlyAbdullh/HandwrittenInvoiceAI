@@ -172,7 +172,9 @@ The defaults suit an RTX 3050 with 4 GB of VRAM, 24 GB of RAM and a Ryzen 5 5600
 | `mmproj_offload` | `true` | Run the vision encoder on the GPU. `false` frees its VRAM for language-model layers, at the cost of slower image encoding. |
 | `ctx_size` | `4096` | Context per request. One cell needs a few hundred tokens; the model's full context would not fit a laptop. |
 | `threads` | llama.cpp's choice | CPU threads. On the 5600H, `6` (one per physical core) is a sensible explicit value. |
-| `image_min_tokens` | `64` | Small cell crops are enlarged to at least this many image tokens, as the transformers backend's image processor does. |
+| `image_min_tokens` | `auto` | Small cell crops are enlarged to the size the model was trained to read: the minimum the mmproj file declares (about 1 megapixel for Nuqta), or 64 tokens if it declares none. Larger means more accurate and slower; a number forces it. |
+| `repetition_penalty` | `1.0` | Off, as Nuqta's model card asks. |
+| `prompts` | Nuqta's own | `Transcribe the Arabic text in this image without any diacritics.` — the model card's prompt. Number and date cells still get their digits-only constraint. |
 
 The server runs one request at a time (`--parallel 1`), so memory does not grow
 with concurrent invoices.
@@ -225,11 +227,12 @@ flagged for review. It is never invented.
 - **Character constraints.** Number and date cells are constrained to digits
   (ASCII, Arabic-Indic and Persian) and their separators by a llama.cpp GBNF
   grammar, as the transformers backend constrains them with its own decoder.
-- **Repetition penalty.** Applied to free-text cells.
+- **Repetition penalty.** Off for Nuqta (its model card); the per-kind default (1.1 on
+  free text) applies to a GGUF model whose config does not say.
 - **`no_repeat_ngram_size`.** The transformers backend's n-gram ban has no
   llama.cpp equivalent and is **not** applied.
 - **Thinking mode.** Qwen3.5 can reason in a `<think>` block. It is switched off
   per request, and any thinking text is removed before validation.
-- **Prompts.** These are the transformers backend's prompts. They can be
-  overridden per content kind with `prompts:` in the recognizer params, if the
-  Nuqta model card recommends different ones.
+- **Prompts.** `nuqta_config.yaml` uses the model card's own prompt for every cell
+  kind. A GGUF model whose config sets no `prompts:` gets the transformers backend's
+  per-kind prompts.

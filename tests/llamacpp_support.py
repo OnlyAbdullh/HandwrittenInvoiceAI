@@ -61,16 +61,16 @@ def write_model(path: Path, architecture: str = "qwen35") -> Path:
     )
 
 
-def write_projector(path: Path, vision: bool = True) -> Path:
-    return write_gguf(
-        path,
-        [
-            ("general.architecture", "clip"),
-            ("general.name", "Nuqta mmproj (test header)"),
-            ("clip.has_vision_encoder", vision),
-            ("clip.projector_type", "qwen3vl_merger"),
-        ],
-    )
+def write_projector(path: Path, vision: bool = True, min_pixels: int | None = None) -> Path:
+    metadata = [
+        ("general.architecture", "clip"),
+        ("general.name", "Nuqta mmproj (test header)"),
+        ("clip.has_vision_encoder", vision),
+        ("clip.projector_type", "qwen3vl_merger"),
+    ]
+    if min_pixels is not None:
+        metadata.append(("clip.vision.image_min_pixels", min_pixels))
+    return write_gguf(path, metadata)
 
 
 def fake_launcher() -> tuple[str, ...]:

@@ -15,7 +15,8 @@ How each part of that policy is carried over, and what is not:
   come back as words. Grammars match UTF-8 characters, not byte-level tokens, so
   Arabic-Indic digits stay allowed without the byte bookkeeping the
   transformers backend needs.
-* **Repetition penalty** -- sent as ``repeat_penalty``.
+* **Repetition penalty** -- sent as ``repeat_penalty``, unless the configuration
+  overrides it (Nuqta's model card asks for it off: 1.0).
 * **no_repeat_ngram_size** -- llama.cpp has no equivalent; it is *not* applied,
   rather than approximated with a different sampler.
 * **Greedy decoding** -- ``temperature: 0``; the same crop gives the same text.
@@ -132,6 +133,7 @@ class LlamaCppVisionBackend:
         constrained_decoding: bool = True,
         disable_thinking: bool = True,
         timeout_s: float = 120.0,
+        repetition_penalty: float | None = None,
     ):
         self.server = server
         self.prompts = dict(prompts)
@@ -140,6 +142,8 @@ class LlamaCppVisionBackend:
         self.constrained_decoding = constrained_decoding
         self.disable_thinking = disable_thinking
         self.timeout_s = timeout_s
+        # None: the per-kind policy. A number: that, for every kind.
+        self.repetition_penalty = repetition_penalty
 
         self._grammars: dict[frozenset, str] = {}
         self._warned_no_logprobs = False
@@ -198,8 +202,10 @@ class LlamaCppVisionBackend:
         if self.constrained_decoding and charset:
             payload["grammar"] = self._grammar(charset)
 
-        penalty = settings.get("repetition_penalty")
-        if penalty:
+        penalty = (
+            self.repetition_penalty if self.repetition_penalty is not None else settings.get("repetition_penalty")
+        )
+        if penalty is not None:
             payload["repeat_penalty"] = penalty
 
         if self.disable_thinking:

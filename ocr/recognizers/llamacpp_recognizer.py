@@ -70,6 +70,27 @@ def _launcher(server_path: str) -> tuple[str, ...]:
     return (resolve_executable(server_path),)
 
 
+# The Hugging Face Qwen-VL processor's floor (65536 px at 32 px per merged token).
+HF_QWEN_VL_MIN_TOKENS = 64
+
+
+def resolve_image_min_tokens(setting, projector_info) -> int | None:
+    """The --image-min-tokens to pass, or None to pass nothing.
+
+    "auto" respects a floor the projector file declares -- the model's own
+    authors chose it, and overriding it shrank Nuqta's input to a fifteenth of
+    its training size -- and otherwise applies the HF processor's floor.
+    """
+    if setting == "auto":
+        if projector_info.image_min_pixels:
+            logger.info(
+                "Projector declares a minimum image size of %d px; using it.", projector_info.image_min_pixels
+            )
+            return None
+        return HF_QWEN_VL_MIN_TOKENS
+    return setting
+
+
 def _gpu_layers(value) -> str | None:
     """None for llama.cpp's own automatic fit; otherwise its -ngl argument.
 
@@ -107,18 +128,23 @@ class LlamaCppRecognizer(PromptedRecognizer):
         mmproj_offload: bool = True,
         ctx_size: int = 4096,
         threads: int | None = None,
-        # Parity with the transformers backend. The Hugging Face Qwen-VL
-        # processor enlarges any image under 65536 px (64 tokens at 32 px per
-        # merged token) before the model sees it; llama.cpp's own floor for
-        # these projectors is 8 tokens, which would hand a small cell crop to
-        # the model at a fraction of the resolution it was trained to read.
-        image_min_tokens: int | None = 64,
+        # The smallest size a crop is enlarged to, in image tokens. "auto": the
+        # floor the projector file declares, when it declares one (Nuqta's asks
+        # for ~1 MP -- its training size), else 64, the Hugging Face Qwen-VL
+        # processor's floor (65536 px), since llama.cpp's own floor for these
+        # projectors is 8 tokens and would hand a small cell over at a fraction
+        # of the resolution the model reads at. A number forces it; null leaves
+        # it to llama.cpp entirely.
+        image_min_tokens: int | str | None = "auto",
         port: int = 0,
         max_new_tokens: int = 64,
         max_image_side: int = MAX_IMAGE_SIDE,
         constrained_decoding: bool = True,
         disable_thinking: bool = True,
         prompts: dict | None = None,
+        # None: the per-kind policy (1.1 on free text). A number applies to every
+        # kind; 1.0 is off, which is what Nuqta's model card asks for.
+        repetition_penalty: float | None = None,
         timeout_s: float = 120.0,
         startup_timeout_s: float = 600.0,
         extra_args: list[str] | None = None,
@@ -139,8 +165,13 @@ class LlamaCppRecognizer(PromptedRecognizer):
             raise ValueError(f"llamacpp recognizer: ctx_size must be >= 1024, got {ctx_size}.")
         if threads is not None and threads < 1:
             raise ValueError(f"llamacpp recognizer: threads must be >= 1, got {threads}.")
-        if image_min_tokens is not None and image_min_tokens < 1:
-            raise ValueError(f"llamacpp recognizer: image_min_tokens must be >= 1, got {image_min_tokens}.")
+        if not (image_min_tokens is None or image_min_tokens == "auto"
+                or (isinstance(image_min_tokens, int) and not isinstance(image_min_tokens, bool) and image_min_tokens >= 1)):
+            raise ValueError(
+                f"llamacpp recognizer: image_min_tokens must be 'auto', null or a number >= 1, got {image_min_tokens!r}."
+            )
+        if repetition_penalty is not None and repetition_penalty <= 0:
+            raise ValueError(f"llamacpp recognizer: repetition_penalty must be > 0, got {repetition_penalty}.")
         if port != 0 and not 1024 <= port <= 65535:
             raise ValueError(f"llamacpp recognizer: port must be 0 (automatic) or 1024-65535, got {port}.")
         if max_new_tokens < 1 or max_image_side < 64:
@@ -159,6 +190,7 @@ class LlamaCppRecognizer(PromptedRecognizer):
             projector_info.path.name,
             projector_info.projector_type or "projector type not stated",
         )
+        min_tokens = resolve_image_min_tokens(image_min_tokens, projector_info)
 
         settings = LlamaServerSettings(
             launcher=_launcher(server_path),
@@ -168,7 +200,7 @@ class LlamaCppRecognizer(PromptedRecognizer):
             gpu_layers=_gpu_layers(gpu_layers),
             mmproj_offload=mmproj_offload,
             threads=threads,
-            image_min_tokens=image_min_tokens,
+            image_min_tokens=min_tokens,
             port=port,
             extra_args=check_extra_args(extra_args or []),
             startup_timeout_s=startup_timeout_s,
@@ -182,6 +214,7 @@ class LlamaCppRecognizer(PromptedRecognizer):
             constrained_decoding=constrained_decoding,
             disable_thinking=disable_thinking,
             timeout_s=timeout_s,
+            repetition_penalty=repetition_penalty,
         )
 
         # Started now, like the transformers worker, so the model load happens

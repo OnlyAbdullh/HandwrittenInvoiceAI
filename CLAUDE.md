@@ -378,10 +378,15 @@ penalty — which is exactly what the transformers worker reports. Verified on a
 a grammar-forced digit came back with the model's own low probability, not 1.0. Keep both
 settings, or confidence becomes a lie.
 
-**llama.cpp's Qwen-VL image floor is 8 tokens; the HF processor's is ~64.** The transformers
-path enlarges any crop under 65536 px before the model sees it; llama.cpp would hand a small
-cell over at a fraction of that resolution. `image_min_tokens: 64` (`--image-min-tokens`)
-restores parity. Don't drop it without measuring.
+**Image size for a GGUF model: respect the projector's own floor.** llama.cpp's default
+floor for Qwen-VL projectors is 8 tokens, far below the ~64 the HF processor enlarges crops
+to on the transformers path. But a projector can declare its own (`clip.vision.image_min_pixels`
+— Nuqta's asks for ~1 MP, its training size), and passing `--image-min-tokens` overrides it.
+An earlier fixed `image_min_tokens: 64` did exactly that and fed Nuqta cells at an eighth of
+the tokens (measured on a real server: 136 vs 1099 prompt tokens for a 240×120 cell) —
+which is what it was then benchmarked on. `image_min_tokens: auto` (the default) uses the
+declared floor when there is one and 64 otherwise. Model-specific reading settings (prompt,
+repeat penalty) belong in that model's config — see `nuqta_config.yaml` and the model card.
 
 **A llama-server must not outlive its owner.** The server object is usually
 garbage-collected *before* interpreter exit (the CLI's orchestrator just goes out of scope),

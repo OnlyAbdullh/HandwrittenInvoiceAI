@@ -58,9 +58,25 @@ ocr:
       # Keeps the vision encoder on the GPU when it fits; false frees its VRAM
       # for language-model layers at the cost of slower image encoding.
       mmproj_offload: true
-      # Small cell crops are enlarged to at least this many image tokens, as the
-      # Hugging Face Qwen-VL processor does for the transformers backend.
-      image_min_tokens: 64
+      # Reading settings from Nuqta's model card (README.md beside the model).
+      #
+      # Image size: "auto" uses the minimum the mmproj file itself declares --
+      # about 1 megapixel, the size Nuqta was trained to read -- so small cells
+      # are enlarged before reading. (Forcing a smaller floor, as an earlier
+      # version did, fed it crops at a fifteenth of that.)
+      image_min_tokens: auto
+      # The card: greedy decoding with no repeat penalty. 1.0 is off.
+      repetition_penalty: 1.0
+      # The card's own prompt, rather than the Arabic prompts tuned for the Qwen
+      # model -- Nuqta was trained on these. "No tashkeel" mode: the pipeline
+      # strips diacritics before matching anyway. Number and date cells keep
+      # their digits-only grammar regardless of the prompt.
+      prompts:
+        number: &nuqta_prompt "Transcribe the Arabic text in this image without any diacritics."
+        date: *nuqta_prompt
+        code: *nuqta_prompt
+        arabic_text: *nuqta_prompt
+        any: *nuqta_prompt
       # Ample for one cell: a 768px crop is a few hundred image tokens.
       ctx_size: 4096
       max_new_tokens: 64

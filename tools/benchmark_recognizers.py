@@ -435,44 +435,84 @@ class FlorenceReader(Reader):
         _free_torch(self.device)
 
 
-class GGUFReader(Reader):
-    """A GGUF model + mmproj through the service's own llama.cpp backend."""
+# The service configuration whose llamacpp reading settings --mode pipeline
+# applies to every GGUF model (prompts, repeat penalty, image size). Set by main().
+LLAMACPP_CONFIG = PROJECT_ROOT / "config" / "nuqta_config.yaml"
 
-    def __init__(self, candidate: Candidate, prompts: dict[str, str] | None, server_path: str, gpu_layers: str | None):
-        from ocr.llamacpp.client import LlamaCppVisionBackend
+
+def service_llamacpp_params(config_path: Path) -> dict:
+    """The `llamacpp` recognizer's reading settings from a service configuration.
+
+    Read as plain YAML -- the VLM venv has no pydantic -- and stripped of the
+    machine-specific entries (model files, server, GPU), which the benchmark
+    supplies per candidate.
+    """
+    import yaml
+
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    recognizer = (data.get("ocr") or {}).get("recognizer") or {}
+    if recognizer.get("name") != "llamacpp":
+        return {}
+    params = dict(recognizer.get("params") or {})
+    for machine_specific in ("model_path", "mmproj_path", "server_path", "gpu_layers"):
+        params.pop(machine_specific, None)
+    return params
+
+
+class GGUFReader(Reader):
+    """A GGUF model + mmproj through the service's own llama.cpp backend.
+
+    In pipeline mode this *is* the service's `llamacpp` recognizer, built with
+    the reading settings of LLAMACPP_CONFIG -- so the benchmark measures exactly
+    what the service would run, including model-specific prompts and image size.
+    """
+
+    def __init__(self, candidate: Candidate, pipeline: bool, server_path: str, gpu_layers: str | None):
         from ocr.llamacpp.gguf import check_vision_model_pair
-        from ocr.llamacpp.server import LlamaServer, LlamaServerSettings, resolve_executable
 
         check_vision_model_pair(candidate.path, candidate.mmproj)
-        pipeline = prompts is not None
+        self.device = f"llama.cpp (gpu_layers={gpu_layers or 'auto'})"
+        self._recognizer = None
+
+        if pipeline:
+            from ocr.recognizers.llamacpp_recognizer import LlamaCppRecognizer
+
+            params = service_llamacpp_params(LLAMACPP_CONFIG)
+            params.setdefault("timeout_s", 600)
+            self._recognizer = LlamaCppRecognizer(
+                model_path=str(candidate.path), mmproj_path=str(candidate.mmproj),
+                server_path=server_path, gpu_layers=gpu_layers or "auto", **params,
+            )
+            self.server, self.backend = self._recognizer.server, self._recognizer._backend
+            return
+
+        from ocr.llamacpp.client import LlamaCppVisionBackend
+        from ocr.llamacpp.server import LlamaServer, LlamaServerSettings, resolve_executable
+
+        # Generic: the model's own defaults, like every other model gets --
+        # including the image size its projector declares.
         self.server = LlamaServer(
             LlamaServerSettings(
-                launcher=(resolve_executable(server_path),),
-                model_path=candidate.path,
-                mmproj_path=candidate.mmproj,
-                gpu_layers=gpu_layers,
-                # Same floor as the service in pipeline mode; llama.cpp's own
-                # default in generic mode, like every other model's defaults.
-                image_min_tokens=64 if pipeline else None,
+                launcher=(resolve_executable(server_path),), model_path=candidate.path,
+                mmproj_path=candidate.mmproj, gpu_layers=gpu_layers,
             ),
             request_timeout_s=600,
         )
         self.server.start()
         self.backend = LlamaCppVisionBackend(
-            self.server,
-            prompts=prompts or {"any": PROMPT},
-            max_new_tokens=64 if pipeline else MAX_NEW_TOKENS,
-            constrained_decoding=pipeline,
-            timeout_s=600,
+            self.server, prompts={"any": PROMPT}, max_new_tokens=MAX_NEW_TOKENS,
+            constrained_decoding=False, timeout_s=600,
         )
-        self.device = f"llama.cpp (gpu_layers={gpu_layers or 'auto'})"
 
     def read(self, image, kind):
         reading = self.backend.read(image, kind if self.backend.constrained_decoding else "any")
         return reading.text, reading.confidence
 
     def close(self):
-        self.server.close()
+        if self._recognizer is not None:
+            self._recognizer.close()
+        else:
+            self.server.close()
 
 
 def build_reader(candidate: Candidate, mode: str, server_path: str, gpu_layers: str | None) -> Reader:
@@ -483,7 +523,7 @@ def build_reader(candidate: Candidate, mode: str, server_path: str, gpu_layers: 
         prompts = dict(PROMPTS)
 
     if candidate.family == "gguf":
-        return GGUFReader(candidate, prompts, server_path, gpu_layers)
+        return GGUFReader(candidate, mode == "pipeline", server_path, gpu_layers)
 
     import torch
 
@@ -801,6 +841,7 @@ def write_reports(out: Path, results: list[ModelResult], crops: list[dict], mode
 
 
 def main(argv: list[str] | None = None) -> int:
+    global LLAMACPP_CONFIG
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--crops", default="datasets/crops")
     ap.add_argument("--models", default=str(MODELS_DIR))
@@ -812,6 +853,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="llama-server executable for GGUF models (default: INVOICE_AI_LLAMA_SERVER or PATH)")
     ap.add_argument("--gpu-layers", default=os.environ.get("INVOICE_AI_LLAMA_GPU_LAYERS"),
                     help="GGUF only: 'all', '0' (CPU) or a count; default lets llama.cpp fit the free VRAM")
+    ap.add_argument("--llamacpp-config", default=str(LLAMACPP_CONFIG),
+                    help="--mode pipeline: service config whose llamacpp reading settings GGUF models get")
     ap.add_argument("--no-isolate", action="store_true",
                     help="run every model in this process (faster to start; one native crash ends the run)")
     ap.add_argument("--out", default="evaluation/reports/model_benchmark")
@@ -819,6 +862,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--exact", help=argparse.SUPPRESS)
     ap.add_argument("--result-file", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
+
+    LLAMACPP_CONFIG = Path(args.llamacpp_config)  # noqa: F841 - module global, read by GGUFReader
+    if not LLAMACPP_CONFIG.is_absolute():
+        LLAMACPP_CONFIG = PROJECT_ROOT / LLAMACPP_CONFIG
 
     crops_path = Path(args.crops)
     if not crops_path.is_absolute():
@@ -869,6 +916,7 @@ def main(argv: list[str] | None = None) -> int:
                     sys.executable, str(Path(__file__).resolve()),
                     "--crops", str(crops_path), "--models", str(args.models), "--mode", args.mode,
                     "--llama-server", args.llama_server, "--exact", candidate.name, "--result-file", str(result_file),
+                    "--llamacpp-config", str(LLAMACPP_CONFIG),
                 ]
                 if args.max_crops:
                     command += ["--max-crops", str(args.max_crops)]

@@ -323,3 +323,13 @@ class TestOverwriteGuard:
         args = ["--photo", str(photo), "--out", str(out), "--config", "config/nuqta_config.yaml"]
         assert export.main(args) == 0
         assert export.main(args) == 0
+
+
+def test_pipeline_mode_reads_nuqtas_settings_from_the_service_config(bench):
+    params = bench.service_llamacpp_params(ROOT / "config" / "nuqta_config.yaml")
+
+    assert params["repetition_penalty"] == 1.0
+    assert params["image_min_tokens"] == "auto"
+    assert params["prompts"]["number"].startswith("Transcribe the Arabic text")
+    # Machine-specific entries are the benchmark's to supply, per candidate.
+    assert not {"model_path", "mmproj_path", "server_path", "gpu_layers"} & set(params)
