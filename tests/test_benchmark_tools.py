@@ -292,3 +292,34 @@ class TestEmptyReadings:
         assert [c["empty"] for c in result.per_crop] == [True, True, False, False]
         assert [c["valid"] for c in result.per_crop] == [False, False, True, False]
         assert result.empty_rate == 0.5 and result.valid_rate == 0.25
+
+
+class TestOverwriteGuard:
+    def test_crops_of_another_photo_are_not_overwritten_without_asking(self, export, tmp_path):
+        from tests.test_llamacpp_pipeline import form_a_photo
+
+        out = tmp_path / "crops"
+        out.mkdir()
+        (out / "labels.jsonl").write_text(
+            json.dumps({"image": "images/img_r1c1.png", "text": "typed by hand", "source": "other.png"}) + "\n",
+            encoding="utf-8",
+        )
+        photo = tmp_path / "img.png"
+        cv2.imwrite(str(photo), form_a_photo())
+
+        assert export.main(["--photo", str(photo), "--out", str(out), "--config", "config/nuqta_config.yaml"]) == 2
+        assert "typed by hand" in (out / "labels.jsonl").read_text(encoding="utf-8")
+
+        assert export.main(["--photo", str(photo), "--out", str(out), "--overwrite",
+                            "--config", "config/nuqta_config.yaml"]) == 0
+        assert "typed by hand" not in (out / "labels.jsonl").read_text(encoding="utf-8")
+
+    def test_re_exporting_the_same_photo_needs_no_flag(self, export, tmp_path):
+        from tests.test_llamacpp_pipeline import form_a_photo
+
+        photo = tmp_path / "img.png"
+        cv2.imwrite(str(photo), form_a_photo())
+        out = tmp_path / "crops"
+        args = ["--photo", str(photo), "--out", str(out), "--config", "config/nuqta_config.yaml"]
+        assert export.main(args) == 0
+        assert export.main(args) == 0

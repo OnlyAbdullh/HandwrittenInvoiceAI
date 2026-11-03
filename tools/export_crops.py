@@ -226,6 +226,19 @@ def export_photo(photo: Path, config, out_dir: Path, truth: InvoiceTruth | None 
     return export_unlabelled(page, photo.name, photo.stem, out_dir)
 
 
+def existing_source(out_dir: Path) -> str | None:
+    """The photo whose crops `out_dir` already holds, if any."""
+    labels = out_dir / "labels.jsonl"
+    if not labels.exists():
+        return None
+    for line in labels.read_text(encoding="utf-8").splitlines():
+        try:
+            return json.loads(line).get("source")
+        except ValueError:
+            continue
+    return None
+
+
 def find_truth_for(photo: Path, truth_dir: Path) -> Path | None:
     """The ground-truth file describing `photo`, if there is one.
 
@@ -256,6 +269,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="with --photo: label its crops from this truth JSON (found automatically in --truth "
                          "when one of its files names this photo, e.g. bills/onlyone/img.png)")
     ap.add_argument("--out", default="datasets/crops")
+    ap.add_argument("--overwrite", action="store_true",
+                    help="with --photo: replace crops of a different photo already in --out")
     args = ap.parse_args(argv)
 
     config = load_config(args.config)
@@ -263,6 +278,20 @@ def main(argv: list[str] | None = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if args.photo is not None:
+        clash = existing_source(out_dir)
+        if clash and clash != args.photo.name and not args.overwrite:
+            print(
+                f"{out_dir} already holds crops of '{clash}', including any answers typed into its "
+                f"labels.jsonl. Use another --out (e.g. datasets\\{args.photo.parent.name or args.photo.stem}), "
+                "or --overwrite to replace them.",
+                file=sys.stderr,
+            )
+            return 2
+        if args.overwrite and (out_dir / "images").is_dir():
+            # Replacing, not merging: stale crops of another photo would sit
+            # in images/ unreferenced and confuse anyone labelling by hand.
+            for stale in (out_dir / "images").glob("*.png"):
+                stale.unlink()
         truth_path = args.truth_file or find_truth_for(args.photo, Path(args.truth))
         truth = (
             InvoiceTruth.model_validate_json(truth_path.read_text(encoding="utf-8"))
