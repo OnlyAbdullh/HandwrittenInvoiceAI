@@ -218,13 +218,35 @@ def export_photo(photo: Path, config, out_dir: Path, truth: InvoiceTruth | None 
     return export_unlabelled(page, photo.name, photo.stem, out_dir)
 
 
+def find_truth_for(photo: Path, truth_dir: Path) -> Path | None:
+    """The ground-truth file describing `photo`, if there is one.
+
+    A truth file names its image relative to the bills folder
+    ("onlyone/img.png"); the photo matches when its path ends with that.
+    """
+    if not truth_dir.is_dir():
+        return None
+    photo_parts = [part.lower() for part in photo.resolve().parts]
+    for path in sorted(truth_dir.glob("*.json")):
+        try:
+            image = json.loads(path.read_text(encoding="utf-8")).get("image") or ""
+        except (OSError, ValueError):
+            continue
+        wanted = [part.lower() for part in Path(image.replace("\\", "/")).parts]
+        if wanted and photo_parts[-len(wanted):] == wanted:
+            return path
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default="config/qwen_config.yaml")
     ap.add_argument("--images", default="bills")
     ap.add_argument("--truth", default="evaluation/ground_truth")
     ap.add_argument("--photo", type=Path, help="export one photo of your own instead of the truth files")
-    ap.add_argument("--truth-file", type=Path, help="with --photo: label its crops from this truth JSON")
+    ap.add_argument("--truth-file", type=Path,
+                    help="with --photo: label its crops from this truth JSON (found automatically in --truth "
+                         "when one of its files names this photo, e.g. bills/onlyone/img.png)")
     ap.add_argument("--out", default="datasets/crops")
     args = ap.parse_args(argv)
 
@@ -233,12 +255,21 @@ def main(argv: list[str] | None = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if args.photo is not None:
+        truth_path = args.truth_file or find_truth_for(args.photo, Path(args.truth))
         truth = (
-            InvoiceTruth.model_validate_json(args.truth_file.read_text(encoding="utf-8"))
-            if args.truth_file else None
+            InvoiceTruth.model_validate_json(truth_path.read_text(encoding="utf-8"))
+            if truth_path else None
         )
         print(f"- {args.photo}")
+        if truth_path and not args.truth_file:
+            print(f"  labelled from {truth_path} (its 'image' is this photo)")
         rows = export_photo(args.photo, config, out_dir, truth)
+        if truth is not None and not rows:
+            # The truth's rows did not line up with the detected table. The
+            # crops are still worth comparing models on, just without scores.
+            print("  falling back to an unlabelled export of every readable cell")
+            truth = None
+            rows = export_photo(args.photo, config, out_dir, None)
         with (out_dir / "labels.jsonl").open("w", encoding="utf-8") as sink:
             for row in rows:
                 sink.write(json.dumps(row, ensure_ascii=False) + "\n")

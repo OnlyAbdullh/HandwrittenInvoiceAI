@@ -171,3 +171,48 @@ class TestPhotoExport:
 
     def test_an_unreadable_photo_fails_cleanly(self, export, tmp_path):
         assert export.main(["--photo", str(tmp_path / "missing.jpg"), "--out", str(tmp_path / "c")]) == 1
+
+
+class TestTruthLookup:
+    def test_the_users_invoice_is_matched_to_its_ground_truth(self, export, tmp_path):
+        found = export.find_truth_for(tmp_path / "bills" / "onlyone" / "img.png", ROOT / "evaluation" / "ground_truth")
+        assert found is not None and found.name == "onlyone.json"
+
+    def test_an_unknown_photo_has_no_truth(self, export, tmp_path):
+        assert export.find_truth_for(tmp_path / "my_invoice.jpg", ROOT / "evaluation" / "ground_truth") is None
+
+    def _truth(self, tmp_path, items: int) -> Path:
+        truth_dir = tmp_path / "truth"
+        truth_dir.mkdir()
+        (truth_dir / "synthetic.json").write_text(json.dumps({
+            "image": "synthetic/img.png", "invoice_number": "00010", "customer_name": "حسام المارديني",
+            "city": "ريف دمشق", "total": 120,
+            "items": [{"product_name": "بوري شبابي زارا", "quantity": 1, "unit_price": 12, "total_price": 12}] * items,
+        }, ensure_ascii=False), encoding="utf-8")
+        photo = tmp_path / "bills" / "synthetic" / "img.png"
+        photo.parent.mkdir(parents=True)
+        from tests.test_llamacpp_pipeline import form_a_photo
+
+        cv2.imwrite(str(photo), form_a_photo())
+        return photo
+
+    def test_a_photo_with_truth_is_exported_labelled_without_asking(self, export, tmp_path):
+        photo = self._truth(tmp_path, items=10)  # the synthetic form has ten written rows
+        out = tmp_path / "crops"
+
+        assert export.main(["--photo", str(photo), "--truth", str(tmp_path / "truth"), "--out", str(out),
+                            "--config", "config/nuqta_config.yaml"]) == 0
+
+        rows = [json.loads(line) for line in (out / "labels.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert rows and all(row["text"] for row in rows)
+        assert {"00010", "12", "بوري شبابي زارا"} <= {row["text"] for row in rows}
+
+    def test_truth_that_does_not_fit_the_table_falls_back_to_unlabelled(self, export, tmp_path):
+        photo = self._truth(tmp_path, items=4)  # four items, ten written rows: cannot be aligned
+        out = tmp_path / "crops"
+
+        assert export.main(["--photo", str(photo), "--truth", str(tmp_path / "truth"), "--out", str(out),
+                            "--config", "config/nuqta_config.yaml"]) == 0
+
+        rows = [json.loads(line) for line in (out / "labels.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert len(rows) == 57 and all(row["text"] is None for row in rows)
