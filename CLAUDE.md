@@ -57,6 +57,10 @@ python main.py path/to/invoice.jpg config/nuqta_config.yaml
 python tools/check_llamacpp_setup.py [--start] [--image cell.png --kind number]
 INVOICE_AI_CONFIG_PATH=config/nuqta_config.yaml python -m api.main
 
+# Compare every model in OCR_Models/ on one photo (step 2 runs in the VLM venv)
+python tools/export_crops.py --photo my_invoice.jpg --out datasets/my_invoice
+qwen_venv/Scripts/python tools/benchmark_recognizers.py --crops datasets/my_invoice [--mode pipeline]
+
 # Tests
 pytest
 pytest tests/test_invoice_parser.py               # one file

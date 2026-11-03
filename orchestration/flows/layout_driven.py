@@ -37,7 +37,7 @@ from orchestration.flows.registry import flow_registry
 # Cells whose content is printed on the form rather than written on it. Reading
 # them costs a model call per cell and tells nobody anything new. The line
 # number column is printed too ("1" .. "10"), and the parser numbers rows itself.
-_SKIPPED_ROLES = frozenset({CellRole.COLUMN_HEADER, CellRole.LABEL, CellRole.LINE_NUMBER})
+SKIPPED_ROLES = frozenset({CellRole.COLUMN_HEADER, CellRole.LABEL, CellRole.LINE_NUMBER})
 
 
 @flow_registry.register("layout_driven")
@@ -89,7 +89,7 @@ class LayoutDrivenFlow(ExtractionFlow):
                 source_id=region.id,
             )
             for region in layout.regions
-            if self.read_printed_labels or region.role not in _SKIPPED_ROLES
+            if self.read_printed_labels or region.role not in SKIPPED_ROLES
         ]
 
     def _read_text(

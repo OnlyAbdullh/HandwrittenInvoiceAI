@@ -1,38 +1,70 @@
-"""Compare every model under OCR_Models/ on the same labelled crops.
+"""Compare every OCR model under OCR_Models/ on the same cell crops, to pick the best one.
 
-    D:/OCR/.venv_vlm/Scripts/python.exe tools/benchmark_recognizers.py
+Two steps, because they need different Python environments:
 
-Run in the VLM virtualenv (torch + transformers>=5), not the service's own venv --
-same reason `tools/qwen_worker.py` does. Needs crops exported first:
+1. **Cut the crops** (the service's venv -- it has OpenCV and the pipeline)::
 
-    python tools/export_crops.py --out datasets/crops
+       python tools/export_crops.py --photo C:\\invoices\\my_invoice.jpg --out datasets/my_invoice
 
-For each model directory, this loads it, reads every crop, scores the reading
-against the label with character error rate (CER) and exact match, times it,
-then unloads it before moving to the next -- so models can be compared on a
-small GPU one at a time rather than needing all of them loaded together.
+   Every cell the pipeline would read, cut exactly as the recognizer receives it.
+   Or, for the labelled invoices in evaluation/ground_truth/:
+   ``python tools/export_crops.py --out datasets/crops``.
 
-Two things this bake-off deliberately does NOT do, so read the numbers as a
-starting point, not a verdict:
+2. **Run every model on them** (the VLM venv -- torch and transformers)::
 
-* **One generic prompt for every model**, not the per-kind, per-quirk prompts
-  tuned for Arabic-Qwen3.5-OCR-v4 in ocr/engines/qwen_vlm_engine.py. Reusing
-  those would bias the comparison toward the model they were measured on.
-* **20 crops from one invoice.** Enough to rule a model out when it is badly
-  worse, not enough to certify a winner. Label more invoices
-  (evaluation/ground_truth/, then tools/export_crops.py) before trusting a
-  close result.
+       qwen_venv\\Scripts\\python.exe tools/benchmark_recognizers.py --crops datasets/my_invoice
+       qwen_venv\\Scripts\\python.exe tools/benchmark_recognizers.py --crops datasets/my_invoice --mode pipeline
 
-A model that does not load (missing remote code, wrong processor, out of
-memory on both GPU and CPU) is reported as skipped with the reason, not
-silently dropped.
+   Then open ``evaluation/reports/model_benchmark.html``: every crop beside every
+   model's reading, plus a ranked summary.
+
+**Labelled or not.** Crops exported from your own photo have no labels, so there is
+no error rate to rank by: the report shows each model's reading next to the crop
+for you to judge, and the summary ranks by how often a reading passes the
+pipeline's own output validation (a number cell that comes back as words fails
+it) -- a necessary condition for a good reading, not proof of one. To get real
+scores, type the correct text into the ``text`` fields of the crops'
+``labels.jsonl`` (or export with ``--truth-file``) and run again: models are then
+ranked by character error rate (CER).
+
+**Two modes.**
+
+* ``--mode generic`` (default) -- one plain prompt for every model and no decoding
+  constraints. The fair comparison of the models themselves, since the
+  pipeline's prompts were tuned on one of them.
+* ``--mode pipeline`` -- each model read the way the service would read it: the
+  per-kind prompts, and for the two models the service can actually run, the
+  production code itself -- ``tools/qwen_worker.py``'s runtime (Qwen3.5 /
+  Qwen2.5-VL checkpoints: per-kind decoding, digit constraints, resizing) and
+  the llama.cpp backend (GGUF: grammar, image-token floor). The answer to "what
+  would my invoices get".
+
+**What is run.** Each folder under OCR_Models/ is classified from its own files:
+
+* chat VLMs (Qwen2/2.5/3-VL, Qwen3.5, GLM-OCR) and Florence-2 -- transformers;
+* encoder-decoder models (TrOCR, Nougat) -- transformers;
+* GGUF folders -- every ``*.gguf`` that is not an ``mmproj`` is a separate entry
+  (``Q4_K_M`` and ``Q8_0`` are compared with each other), run by llama.cpp's
+  ``llama-server`` with the folder's mmproj. Needs ``llama-server`` on PATH or
+  ``--llama-server``.
+
+Anything else is reported as skipped with the reason, never silently dropped.
+Models are loaded one at a time and unloaded before the next, so a 4 GB GPU can
+compare them all; a model that does not fit on the GPU is retried on the CPU.
+
+Read the numbers for what they are: a few dozen crops from one or two invoices
+rule a model out when it is clearly worse; they do not certify a close winner.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import gc
+import html
+import io
 import json
+import os
 import re
 import sys
 import time
@@ -42,6 +74,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = PROJECT_ROOT / "OCR_Models"
+sys.path.insert(0, str(PROJECT_ROOT))
 
 # A generic instruction, the same for every model, deliberately not the
 # per-kind prompts tuned for one specific model (see module docstring).
@@ -51,8 +84,8 @@ MAX_NEW_TOKENS = 48
 
 
 # --------------------------------------------------------------------------
-# Scoring -- copied rather than imported, so this script has no dependency on
-# the service's own venv. Same rules as string_matching.normalization /
+# Scoring -- copied rather than imported, so the scoring has no dependency on
+# the service's venv. Same rules as string_matching.normalization /
 # evaluation.metrics: NFKC, Arabic-Indic digits folded, diacritics and
 # punctuation stripped, case folded.
 # --------------------------------------------------------------------------
@@ -109,20 +142,37 @@ def levenshtein(a: str, b: str) -> int:
     return previous[-1]
 
 
-def cer(predicted: str, expected: str) -> float:
+def cer(predicted: str, expected: str | None) -> float | None:
+    """Character error rate against the label; None when the crop has no label."""
+    if expected is None:
+        return None
     truth = normalize_text(expected)
     if not truth:
-        return 0.0
-    return levenshtein(normalize_text(predicted), truth) / len(truth)
+        return None
+    return round(levenshtein(normalize_text(predicted), truth) / len(truth), 3)
+
+
+def passes_validation(text: str, kind: str) -> bool | None:
+    """Whether the pipeline's own output validation would keep this reading.
+
+    None when the validator cannot be imported (it needs only the standard
+    library, numpy and Pillow from this project, so that should be rare).
+    """
+    try:
+        from core.domain.roles import ContentKind
+        from ocr.recognizers.output_validation import clean
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        return clean(text, ContentKind(kind)) is not None
+    except ValueError:
+        return None
 
 
 # --------------------------------------------------------------------------
-# What's in OCR_Models/, and how to load it
+# What's in OCR_Models/
 # --------------------------------------------------------------------------
 
-# Architectures this script knows how to drive, and which family. Anything
-# else -- GGUF, a folder with no config.json, a known-broken download -- is
-# reported as skipped rather than guessed at.
 _CHAT_VLM_ARCHES = {
     "Qwen3_5ForConditionalGeneration",
     "Qwen2_5_VLForConditionalGeneration",
@@ -131,6 +181,313 @@ _CHAT_VLM_ARCHES = {
     "GlmOcrForConditionalGeneration",
 }
 _ENCODER_DECODER_ARCHES = {"VisionEncoderDecoderModel"}
+_FLORENCE_ARCHES = {"Florence2ForConditionalGeneration"}
+
+# The architectures the service's transformers worker runs in production
+# (tools/qwen_worker.py ARCH_CLASSES). Only these get its exact decoding in
+# --mode pipeline.
+_PRODUCTION_ARCHES = {"qwen3_5", "qwen2_5_vl"}
+
+
+@dataclass
+class Candidate:
+    name: str
+    path: Path               # the model folder, or the .gguf file
+    family: str = ""
+    mmproj: Path | None = None
+    model_type: str = ""
+    skipped_reason: str | None = None
+
+
+def classify(model_dir: Path) -> tuple[str, str | None, str]:
+    """(family, skip_reason, model_type). family is "" when skip_reason is set."""
+    config_path = model_dir / "config.json"
+    if not config_path.exists():
+        return "", "no config.json (not a transformers model, or an incomplete download)", ""
+
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return "", f"config.json unreadable: {exc}", ""
+
+    archs = set(config.get("architectures") or [])
+    model_type = config.get("model_type") or ""
+    if archs & _CHAT_VLM_ARCHES:
+        return "chat_vlm", None, model_type
+    if archs & _FLORENCE_ARCHES or model_type.startswith("florence"):
+        return "florence2", None, model_type
+    if archs & _ENCODER_DECODER_ARCHES:
+        return "encoder_decoder", None, model_type
+    return "", f"unrecognized architecture(s) {sorted(archs) or '(none)'}", model_type
+
+
+def discover(models_dir: Path, only: list[str] | None) -> list[Candidate]:
+    """Every model to compare. A GGUF folder becomes one entry per quantization."""
+    candidates: list[Candidate] = []
+    for folder in sorted(p for p in models_dir.iterdir() if p.is_dir()):
+        ggufs = sorted(folder.glob("*.gguf"))
+        if ggufs:
+            projectors = [g for g in ggufs if "mmproj" in g.name.lower()]
+            models = [g for g in ggufs if g not in projectors]
+            if not projectors:
+                candidates.append(Candidate(
+                    folder.name, folder, skipped_reason="GGUF folder without an *mmproj*.gguf: "
+                    "a text-only model cannot read images"))
+                continue
+            for model in models:
+                candidates.append(Candidate(f"{folder.name} [{model.stem}]", model, "gguf", mmproj=projectors[0]))
+            continue
+
+        family, reason, model_type = classify(folder)
+        candidates.append(Candidate(folder.name, folder, family, model_type=model_type, skipped_reason=reason))
+
+    if only:
+        wanted = [w.lower() for w in only]
+        candidates = [c for c in candidates if any(w in c.name.lower() for w in wanted)]
+    return candidates
+
+
+# --------------------------------------------------------------------------
+# Readers. Each loads one model, reads (image, kind), and unloads.
+# --------------------------------------------------------------------------
+
+
+class Reader:
+    device = "cpu"
+
+    def read(self, image, kind: str) -> tuple[str, float | None]:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        pass
+
+
+def _free_torch(device: str) -> None:
+    gc.collect()
+    if device == "cuda":
+        import torch
+
+        torch.cuda.empty_cache()
+
+
+class ChatVLMReader(Reader):
+    """Any chat-template VLM through transformers, with a plain generate()."""
+
+    def __init__(self, model_dir: Path, device: str, prompts: dict[str, str] | None):
+        import torch
+        import transformers
+        from transformers import AutoProcessor
+
+        config = json.loads((model_dir / "config.json").read_text(encoding="utf-8"))
+        arch_name = config["architectures"][0]
+        cls = getattr(transformers, arch_name, None) or transformers.AutoModelForImageTextToText
+
+        self.processor = AutoProcessor.from_pretrained(str(model_dir), trust_remote_code=True)
+        kwargs = {"trust_remote_code": True, "low_cpu_mem_usage": True}
+        if device == "cuda":
+            kwargs["dtype"] = torch.bfloat16
+            kwargs["device_map"] = {"": 0}
+        else:
+            kwargs["dtype"] = torch.float32
+        self.model = cls.from_pretrained(str(model_dir), **kwargs).eval()
+        self.device = device
+        self.prompts = prompts
+
+    def read(self, image, kind):
+        import torch
+
+        prompt = self.prompts.get(kind, self.prompts["any"]) if self.prompts else PROMPT
+        messages = [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": prompt}]}]
+        text_input = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        try:
+            from qwen_vl_utils import process_vision_info
+
+            images = process_vision_info(messages)[0]
+        except Exception:  # noqa: BLE001 - not every chat model needs/has this helper
+            images = [image]
+
+        inputs = self.processor(text=[text_input], images=images, padding=True, return_tensors="pt").to(self.model.device)
+        tokenizer = getattr(self.processor, "tokenizer", self.processor)
+        with torch.inference_mode():
+            # Mild anti-repetition -- stops a small VLM looping a single token on a
+            # crop that defeats it -- PLUS explicit eos/pad: without them some
+            # models never stop and fill every one of max_new_tokens with
+            # increasingly random continuation text past a correct answer.
+            out = self.model.generate(
+                **inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=False,
+                repetition_penalty=1.15, no_repeat_ngram_size=4,
+                eos_token_id=tokenizer.eos_token_id, pad_token_id=tokenizer.pad_token_id,
+            )
+        generated = out[:, inputs.input_ids.shape[1]:]
+        text = self.processor.batch_decode(generated, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+        # Short-field answers: the first line is the answer, anything after is
+        # the model continuing to talk once it had already finished.
+        return text.strip().split("\n\n")[0].split("\n")[0].strip(), None
+
+    def close(self):
+        del self.model, self.processor
+        _free_torch(self.device)
+
+
+class ProductionQwenReader(Reader):
+    """The service's own transformers runtime -- tools/qwen_worker.QwenRuntime."""
+
+    def __init__(self, model_dir: Path, device: str, prompts: dict[str, str]):
+        from tools.qwen_worker import QwenRuntime
+
+        self.runtime = QwenRuntime(str(model_dir))
+        self.device = "cuda" if str(self.runtime.model.device).startswith("cuda") else "cpu"
+        self.prompts = prompts
+
+    def read(self, image, kind):
+        result = self.runtime.read_batch([{"image": image, "prompt": self.prompts.get(kind, self.prompts["any"]), "kind": kind}])[0]
+        if "error" in result:
+            raise RuntimeError(result["error"])
+        return result.get("text") or "", result.get("confidence")
+
+    def close(self):
+        del self.runtime
+        _free_torch(self.device)
+
+
+class EncoderDecoderReader(Reader):
+    """TrOCR, Nougat and other VisionEncoderDecoder checkpoints. No prompt."""
+
+    def __init__(self, model_dir: Path, device: str, prompts=None):
+        import torch
+        from transformers import AutoProcessor, VisionEncoderDecoderModel
+
+        self.processor = AutoProcessor.from_pretrained(str(model_dir))
+        dtype = torch.bfloat16 if device == "cuda" else torch.float32
+        self.model = VisionEncoderDecoderModel.from_pretrained(str(model_dir), dtype=dtype).to(device).eval()
+        self.device = device
+
+    def read(self, image, kind):
+        import torch
+
+        pixel_values = self.processor(images=image, return_tensors="pt").pixel_values.to(self.model.device, self.model.dtype)
+        with torch.inference_mode():
+            out = self.model.generate(pixel_values, max_new_tokens=MAX_NEW_TOKENS)
+        return self.processor.batch_decode(out, skip_special_tokens=True)[0].strip(), None
+
+    def close(self):
+        del self.model, self.processor
+        _free_torch(self.device)
+
+
+class FlorenceReader(Reader):
+    """Florence-2 OCR fine-tunes: a task token instead of a prompt."""
+
+    TASK = "<OCR>"
+
+    def __init__(self, model_dir: Path, device: str, prompts=None):
+        import torch
+        import transformers
+        from transformers import AutoProcessor
+
+        self.processor = AutoProcessor.from_pretrained(str(model_dir), trust_remote_code=True)
+        cls = getattr(transformers, "Florence2ForConditionalGeneration", None) or transformers.AutoModelForCausalLM
+        dtype = torch.float16 if device == "cuda" else torch.float32
+        self.model = cls.from_pretrained(str(model_dir), dtype=dtype, trust_remote_code=True).to(device).eval()
+        self.device = device
+
+    def read(self, image, kind):
+        import torch
+
+        inputs = self.processor(text=self.TASK, images=image, return_tensors="pt").to(self.model.device)
+        with torch.inference_mode():
+            out = self.model.generate(
+                input_ids=inputs["input_ids"],
+                pixel_values=inputs["pixel_values"].to(self.model.dtype),
+                max_new_tokens=MAX_NEW_TOKENS, num_beams=3, do_sample=False,
+            )
+        raw = self.processor.batch_decode(out, skip_special_tokens=False)[0]
+        try:
+            parsed = self.processor.post_process_generation(raw, task=self.TASK, image_size=image.size)
+            text = parsed.get(self.TASK, raw) if isinstance(parsed, dict) else str(parsed)
+        except Exception:  # noqa: BLE001 - older processors lack the post-processor
+            text = re.sub(r"</?s>|<pad>", "", raw)
+        return str(text).strip(), None
+
+    def close(self):
+        del self.model, self.processor
+        _free_torch(self.device)
+
+
+class GGUFReader(Reader):
+    """A GGUF model + mmproj through the service's own llama.cpp backend."""
+
+    def __init__(self, candidate: Candidate, prompts: dict[str, str] | None, server_path: str, gpu_layers: str | None):
+        from ocr.llamacpp.client import LlamaCppVisionBackend
+        from ocr.llamacpp.gguf import check_vision_model_pair
+        from ocr.llamacpp.server import LlamaServer, LlamaServerSettings, resolve_executable
+
+        check_vision_model_pair(candidate.path, candidate.mmproj)
+        pipeline = prompts is not None
+        self.server = LlamaServer(
+            LlamaServerSettings(
+                launcher=(resolve_executable(server_path),),
+                model_path=candidate.path,
+                mmproj_path=candidate.mmproj,
+                gpu_layers=gpu_layers,
+                # Same floor as the service in pipeline mode; llama.cpp's own
+                # default in generic mode, like every other model's defaults.
+                image_min_tokens=64 if pipeline else None,
+            ),
+            request_timeout_s=600,
+        )
+        self.server.start()
+        self.backend = LlamaCppVisionBackend(
+            self.server,
+            prompts=prompts or {"any": PROMPT},
+            max_new_tokens=64 if pipeline else MAX_NEW_TOKENS,
+            constrained_decoding=pipeline,
+            timeout_s=600,
+        )
+        self.device = f"llama.cpp (gpu_layers={gpu_layers or 'auto'})"
+
+    def read(self, image, kind):
+        reading = self.backend.read(image, kind if self.backend.constrained_decoding else "any")
+        return reading.text, reading.confidence
+
+    def close(self):
+        self.server.close()
+
+
+def build_reader(candidate: Candidate, mode: str, server_path: str, gpu_layers: str | None) -> Reader:
+    prompts = None
+    if mode == "pipeline":
+        from ocr.engines.qwen_vlm_engine import PROMPTS
+
+        prompts = dict(PROMPTS)
+
+    if candidate.family == "gguf":
+        return GGUFReader(candidate, prompts, server_path, gpu_layers)
+
+    import torch
+
+    def on_device(make):
+        if not torch.cuda.is_available():
+            return make("cpu")
+        try:
+            return make("cuda")
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            print(f"    CUDA out of memory; retrying {candidate.name} on CPU (will be slow).")
+            return make("cpu")
+
+    if candidate.family == "chat_vlm":
+        if mode == "pipeline" and candidate.model_type in _PRODUCTION_ARCHES:
+            return ProductionQwenReader(candidate.path, "auto", prompts)
+        return on_device(lambda device: ChatVLMReader(candidate.path, device, prompts))
+    if candidate.family == "florence2":
+        return on_device(lambda device: FlorenceReader(candidate.path, device))
+    return on_device(lambda device: EncoderDecoderReader(candidate.path, device))
+
+
+# --------------------------------------------------------------------------
+# Running the bake-off
+# --------------------------------------------------------------------------
 
 
 @dataclass
@@ -142,121 +499,39 @@ class ModelResult:
     load_s: float = 0.0
     per_crop: list[dict] = field(default_factory=list)
 
+    def _mean(self, key: str, rows=None):
+        values = [c[key] for c in (rows if rows is not None else self.per_crop) if c.get(key) is not None]
+        return round(sum(values) / len(values), 3) if values else None
+
     @property
     def mean_cer(self) -> float | None:
-        scored = [c["cer"] for c in self.per_crop if c["cer"] is not None]
-        return round(sum(scored) / len(scored), 3) if scored else None
+        return self._mean("cer")
 
     @property
     def exact_match_rate(self) -> float | None:
-        scored = [c for c in self.per_crop if c["cer"] is not None]
+        scored = [c for c in self.per_crop if c.get("cer") is not None]
         return round(sum(c["cer"] == 0.0 for c in scored) / len(scored), 3) if scored else None
 
     @property
+    def valid_rate(self) -> float | None:
+        checked = [c for c in self.per_crop if c.get("valid") is not None]
+        return round(sum(bool(c["valid"]) for c in checked) / len(checked), 3) if checked else None
+
+    @property
     def mean_seconds(self) -> float | None:
-        timed = [c["seconds"] for c in self.per_crop if c.get("seconds") is not None]
-        return round(sum(timed) / len(timed), 2) if timed else None
+        return self._mean("seconds")
 
+    @property
+    def mean_confidence(self) -> float | None:
+        return self._mean("confidence")
 
-def classify(model_dir: Path) -> tuple[str, str | None]:
-    """(family, skip_reason). family is "" when skip_reason is set."""
-    config_path = model_dir / "config.json"
-    if not config_path.exists():
-        return "", "no config.json (not a transformers model, or an incomplete download)"
-
-    try:
-        config = json.loads(config_path.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001
-        return "", f"config.json unreadable: {exc}"
-
-    archs = set(config.get("architectures") or [])
-    if archs & _CHAT_VLM_ARCHES:
-        return "chat_vlm", None
-    if archs & _ENCODER_DECODER_ARCHES:
-        return "encoder_decoder", None
-    return "", f"unrecognized architecture(s) {sorted(archs) or '(none)'}"
-
-
-def load_chat_vlm(model_dir: Path, device: str):
-    import torch
-    import transformers
-    from transformers import AutoProcessor
-
-    config = json.loads((model_dir / "config.json").read_text(encoding="utf-8"))
-    arch_name = config["architectures"][0]
-    cls = getattr(transformers, arch_name, None) or transformers.AutoModelForImageTextToText
-
-    processor = AutoProcessor.from_pretrained(str(model_dir), trust_remote_code=True)
-    kwargs = {"trust_remote_code": True, "low_cpu_mem_usage": True}
-    if device == "cuda":
-        kwargs["dtype"] = torch.bfloat16
-        kwargs["device_map"] = {"": 0}
-    else:
-        kwargs["dtype"] = torch.float32
-    model = cls.from_pretrained(str(model_dir), **kwargs).eval()
-    return model, processor
-
-
-def read_chat_vlm(model, processor, image) -> str:
-    import torch
-
-    messages = [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": PROMPT}]}]
-    text_input = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    try:
-        from qwen_vl_utils import process_vision_info
-
-        images = process_vision_info(messages)[0]
-    except Exception:  # noqa: BLE001 - not every chat model needs/has this helper
-        images = [image]
-
-    inputs = processor(text=[text_input], images=images, padding=True, return_tensors="pt").to(model.device)
-    tokenizer = getattr(processor, "tokenizer", processor)
-    with torch.inference_mode():
-        # Mild anti-repetition -- stops a small VLM looping a single token on a
-        # crop that defeats it -- PLUS explicit eos/pad: without them some
-        # models never stop and fill every one of max_new_tokens with
-        # increasingly random continuation text past a correct answer.
-        out = model.generate(
-            **inputs, max_new_tokens=MAX_NEW_TOKENS, do_sample=False,
-            repetition_penalty=1.15, no_repeat_ngram_size=4,
-            eos_token_id=tokenizer.eos_token_id, pad_token_id=tokenizer.pad_token_id,
-        )
-    generated = out[:, inputs.input_ids.shape[1]:]
-    text = processor.batch_decode(generated, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0].strip()
-    # Belt and suspenders beyond eos: these are short-field answers, so the
-    # first line is the answer and anything after a blank line is the model
-    # continuing to talk once it had already finished.
-    return text.split("\n\n")[0].split("\n")[0].strip()
-
-
-def load_encoder_decoder(model_dir: Path, device: str):
-    import torch
-    from transformers import AutoProcessor, VisionEncoderDecoderModel
-
-    processor = AutoProcessor.from_pretrained(str(model_dir))
-    dtype = torch.bfloat16 if device == "cuda" else torch.float32
-    model = VisionEncoderDecoderModel.from_pretrained(str(model_dir), dtype=dtype).to(device).eval()
-    return model, processor
-
-
-def read_encoder_decoder(model, processor, image) -> str:
-    import torch
-
-    pixel_values = processor(images=image, return_tensors="pt").pixel_values.to(model.device, model.dtype)
-    with torch.inference_mode():
-        out = model.generate(pixel_values, max_new_tokens=MAX_NEW_TOKENS)
-    return processor.batch_decode(out, skip_special_tokens=True)[0].strip()
-
-
-ADAPTERS = {
-    "chat_vlm": (load_chat_vlm, read_chat_vlm),
-    "encoder_decoder": (load_encoder_decoder, read_encoder_decoder),
-}
-
-
-# --------------------------------------------------------------------------
-# Running the bake-off
-# --------------------------------------------------------------------------
+    def summary(self) -> dict:
+        return {
+            "name": self.name, "family": self.family, "device": self.device, "load_s": self.load_s,
+            "skipped_reason": self.skipped_reason, "mean_cer": self.mean_cer,
+            "exact_match_rate": self.exact_match_rate, "valid_rate": self.valid_rate,
+            "mean_seconds": self.mean_seconds, "mean_confidence": self.mean_confidence,
+        }
 
 
 def load_crops(crops_dir: Path) -> list[dict]:
@@ -264,136 +539,230 @@ def load_crops(crops_dir: Path) -> list[dict]:
 
     rows = []
     for line in (crops_dir / "labels.jsonl").read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
         row = json.loads(line)
         row["pil"] = Image.open(crops_dir / row["image"]).convert("RGB")
         rows.append(row)
     return rows
 
 
-def run_model(model_dir: Path, crops: list[dict], max_crops: int | None) -> ModelResult:
-    import torch
-
-    result = ModelResult(name=model_dir.name)
-    family, skip_reason = classify(model_dir)
-    if skip_reason:
-        result.skipped_reason = skip_reason
+def run_model(candidate: Candidate, crops: list[dict], max_crops: int | None, mode: str,
+              server_path: str, gpu_layers: str | None) -> ModelResult:
+    result = ModelResult(name=candidate.name, family=candidate.family)
+    if candidate.skipped_reason:
+        result.skipped_reason = candidate.skipped_reason
         return result
-    result.family = family
-    load_fn, read_fn = ADAPTERS[family]
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    started = time.perf_counter()
     try:
-        t0 = time.perf_counter()
-        try:
-            model, processor = load_fn(model_dir, device)
-        except torch.cuda.OutOfMemoryError:
-            torch.cuda.empty_cache()
-            print(f"    CUDA out of memory; retrying {model_dir.name} on CPU (will be slow).")
-            device = "cpu"
-            model, processor = load_fn(model_dir, device)
-        result.device = device
-        result.load_s = round(time.perf_counter() - t0, 1)
+        reader = build_reader(candidate, mode, server_path, gpu_layers)
     except Exception as exc:  # noqa: BLE001 - one bad model must not end the bake-off
-        result.skipped_reason = f"failed to load: {type(exc).__name__}: {exc}"
+        result.skipped_reason = f"failed to load: {type(exc).__name__}: {str(exc).splitlines()[0][:300]}"
         return result
+    result.device = reader.device
+    result.load_s = round(time.perf_counter() - started, 1)
 
-    sample = crops[:max_crops] if max_crops else crops
-    for row in sample:
-        started = time.perf_counter()
-        try:
-            text = read_fn(model, processor, row["pil"])
-            score = cer(text, row["text"])
-        except Exception as exc:  # noqa: BLE001
-            text, score = f"<error: {exc}>", None
-        result.per_crop.append({
-            "cell": row["cell"], "kind": row["kind"], "expected": row["text"],
-            "predicted": text, "cer": score, "seconds": round(time.perf_counter() - started, 2),
-        })
-
-    del model, processor
-    gc.collect()
-    if device == "cuda":
-        torch.cuda.empty_cache()
+    try:
+        for row in (crops[:max_crops] if max_crops else crops):
+            started = time.perf_counter()
+            confidence = None
+            try:
+                text, confidence = reader.read(row["pil"], row.get("kind") or "any")
+            except Exception as exc:  # noqa: BLE001
+                text = f"<error: {type(exc).__name__}: {exc}>"
+            seconds = round(time.perf_counter() - started, 2)
+            errored = text.startswith("<error:")
+            result.per_crop.append({
+                "image": row["image"], "cell": row.get("cell"), "kind": row.get("kind"), "role": row.get("role"),
+                "expected": row.get("text"), "predicted": text,
+                "cer": None if errored else cer(text, row.get("text")),
+                "valid": False if errored else passes_validation(text, row.get("kind") or "any"),
+                "confidence": confidence, "seconds": seconds,
+            })
+    finally:
+        reader.close()
     return result
 
 
-def to_markdown(results: list[ModelResult]) -> str:
-    ranked = sorted((r for r in results if r.mean_cer is not None), key=lambda r: r.mean_cer)
+def rank(results: list[ModelResult]) -> tuple[list[ModelResult], bool]:
+    """Ran models best first, and whether the ranking is by error rate."""
+    ran = [r for r in results if not r.skipped_reason and r.per_crop]
+    labelled = any(r.mean_cer is not None for r in ran)
+    if labelled:
+        key = lambda r: (r.mean_cer if r.mean_cer is not None else 9e9, -(r.exact_match_rate or 0), r.mean_seconds or 9e9)
+    else:
+        key = lambda r: (-(r.valid_rate or 0), r.mean_seconds or 9e9)
+    return sorted(ran, key=key), labelled
+
+
+def to_markdown(results: list[ModelResult], mode: str, crops_dir: str) -> str:
+    ranked, labelled = rank(results)
     skipped = [r for r in results if r.skipped_reason]
 
     lines = [
         "# Recognizer bake-off",
         "",
-        f"{len(results)} model(s) found under OCR_Models/; {len(ranked)} ran, {len(skipped)} skipped.",
+        f"Crops: `{crops_dir}`. Mode: **{mode}**. {len(results)} model(s); {len(ranked)} ran, {len(skipped)} skipped.",
         "",
-        "One generic prompt for every model, 20 crops from one invoice. A useful first",
-        "filter, not a verdict -- see the module docstring in tools/benchmark_recognizers.py.",
+        ("Ranked by character error rate against the labels." if labelled else
+         "**The crops have no labels**, so models are ranked by how often their reading passes the "
+         "pipeline's output validation -- a sanity check, not accuracy. Judge the readings in the HTML "
+         "report, or fill in `text` in labels.jsonl and run again for real scores."),
         "",
-        "| Rank | Model | Family | Device | Mean CER | Exact match | Mean s/crop | Load s |",
-        "|---|---|---|---|---|---|---|---|",
+        "| Rank | Model | Family | Device | Mean CER | Exact match | Passes validation | Mean confidence | Mean s/crop | Load s |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
     for i, r in enumerate(ranked, 1):
         lines.append(
-            f"| {i} | {r.name} | {r.family} | {r.device} | {r.mean_cer} | "
-            f"{r.exact_match_rate} | {r.mean_seconds} | {r.load_s} |"
+            f"| {i} | {r.name} | {r.family} | {r.device} | {r.mean_cer} | {r.exact_match_rate} | "
+            f"{r.valid_rate} | {r.mean_confidence} | {r.mean_seconds} | {r.load_s} |"
         )
-
     if skipped:
         lines += ["", "## Skipped", "", "| Model | Reason |", "|---|---|"]
         for r in skipped:
             lines.append(f"| {r.name} | {r.skipped_reason} |")
-
     for r in ranked:
-        lines += [f"\n## {r.name}\n", "| Cell | Kind | Expected | Predicted | CER |", "|---|---|---|---|---|"]
+        lines += [f"\n## {r.name}\n", "| Cell | Kind | Expected | Predicted | CER | Valid |", "|---|---|---|---|---|---|"]
         for c in r.per_crop:
-            lines.append(f"| {c['cell']} | {c['kind']} | {c['expected']} | {c['predicted']} | {c['cer']} |")
-
+            lines.append(f"| {c['cell']} | {c['kind']} | {c['expected']} | {c['predicted']} | {c['cer']} | {c['valid']} |")
     return "\n".join(lines)
 
 
-def main() -> int:
+def _thumbnail_uri(image) -> str:
+    thumb = image.copy()
+    thumb.thumbnail((360, 140))
+    buffer = io.BytesIO()
+    thumb.save(buffer, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def to_html(results: list[ModelResult], crops: list[dict], mode: str, crops_dir: str) -> str:
+    """Every crop beside every model's reading -- the report for judging by eye."""
+    ranked, labelled = rank(results)
+    esc = html.escape
+
+    summary_rows = "".join(
+        f"<tr><td>{i}</td><td>{esc(r.name)}</td><td>{esc(r.family)}</td><td>{esc(str(r.device))}</td>"
+        f"<td>{r.mean_cer if r.mean_cer is not None else '–'}</td>"
+        f"<td>{r.exact_match_rate if r.exact_match_rate is not None else '–'}</td>"
+        f"<td>{r.valid_rate if r.valid_rate is not None else '–'}</td>"
+        f"<td>{r.mean_confidence if r.mean_confidence is not None else '–'}</td>"
+        f"<td>{r.mean_seconds}</td><td>{r.load_s}</td></tr>"
+        for i, r in enumerate(ranked, 1)
+    )
+    skipped_rows = "".join(
+        f"<tr><td>{esc(r.name)}</td><td>{esc(r.skipped_reason or '')}</td></tr>" for r in results if r.skipped_reason
+    )
+
+    by_model = {r.name: {c["image"]: c for c in r.per_crop} for r in ranked}
+    header = "".join(f"<th>{esc(r.name)}</th>" for r in ranked)
+    body = []
+    for row in crops:
+        cells = []
+        for r in ranked:
+            c = by_model[r.name].get(row["image"])
+            if c is None:
+                cells.append("<td></td>")
+                continue
+            css = "rej" if c["valid"] is False else ""
+            if c["cer"] is not None:
+                css += " ok" if c["cer"] == 0 else (" near" if c["cer"] <= 0.34 else " bad")
+            meta = f"{c['seconds']}s" + (f" · conf {c['confidence']:.3f}" if c.get("confidence") is not None else "")
+            if c["cer"] is not None:
+                meta += f" · CER {c['cer']}"
+            cells.append(f'<td class="{css.strip()}"><div dir="auto">{esc(c["predicted"]) or "<i>(empty)</i>"}</div>'
+                         f'<small>{meta}</small></td>')
+        expected = esc(row["text"]) if row.get("text") is not None else "<i>no label</i>"
+        body.append(
+            f'<tr><td class="crop"><img src="{_thumbnail_uri(row["pil"])}"><br><small>{esc(str(row.get("cell")))} · '
+            f'{esc(str(row.get("role")))} · {esc(str(row.get("kind")))}</small><div dir="auto">{expected}</div></td>'
+            + "".join(cells) + "</tr>"
+        )
+
+    note = ("Ranked by character error rate against the labels." if labelled else
+            "These crops have no labels: ranked by how often a reading passes the pipeline's output "
+            "validation, which is a sanity check, not accuracy. Judge the readings below, or type the "
+            "correct text into labels.jsonl and run again.")
+    return f"""<!doctype html><html><head><meta charset="utf-8"><title>OCR model bake-off</title>
+<style>
+body{{font-family:system-ui,'Segoe UI',Tahoma,sans-serif;margin:16px;color:#222}}
+table{{border-collapse:collapse;margin-bottom:24px}} td,th{{border:1px solid #ccc;padding:6px;vertical-align:top}}
+th{{background:#f3f3f3;position:sticky;top:0}} .crop img{{max-width:360px;border:1px solid #999}}
+td div{{font-size:18px}} small{{color:#666}} .ok{{background:#e3f6e3}} .near{{background:#fff6d6}}
+.bad{{background:#fde3e3}} .rej div{{text-decoration:line-through;color:#a33}} .scroll{{overflow-x:auto}}
+</style></head><body>
+<h1>OCR model bake-off</h1>
+<p>Crops: <code>{esc(crops_dir)}</code> · mode <b>{esc(mode)}</b> · {len(crops)} crop(s). {esc(note)}
+Struck-through readings are ones the pipeline's output validation would reject.</p>
+<h2>Summary</h2>
+<table><tr><th>Rank</th><th>Model</th><th>Family</th><th>Device</th><th>Mean CER</th><th>Exact match</th>
+<th>Passes validation</th><th>Mean confidence</th><th>Mean s/crop</th><th>Load s</th></tr>{summary_rows}</table>
+{"<h2>Skipped</h2><table><tr><th>Model</th><th>Reason</th></tr>" + skipped_rows + "</table>" if skipped_rows else ""}
+<h2>Every reading</h2>
+<div class="scroll"><table><tr><th>Crop</th>{header}</tr>{"".join(body)}</table></div>
+</body></html>"""
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--crops", default="datasets/crops")
     ap.add_argument("--models", default=str(MODELS_DIR))
-    ap.add_argument("--only", nargs="*", help="model folder name(s) to run; default is every folder")
+    ap.add_argument("--only", nargs="*", help="run only models whose name contains one of these")
     ap.add_argument("--max-crops", type=int, default=None, help="cap crops per model, for a quick pass")
+    ap.add_argument("--mode", choices=("generic", "pipeline"), default="generic",
+                    help="generic: one plain prompt for all; pipeline: read the way the service would")
+    ap.add_argument("--llama-server", default=os.environ.get("INVOICE_AI_LLAMA_SERVER", "llama-server"),
+                    help="llama-server executable for GGUF models (default: INVOICE_AI_LLAMA_SERVER or PATH)")
+    ap.add_argument("--gpu-layers", default=os.environ.get("INVOICE_AI_LLAMA_GPU_LAYERS"),
+                    help="GGUF only: 'all', '0' (CPU) or a count; default lets llama.cpp fit the free VRAM")
     ap.add_argument("--out", default="evaluation/reports/model_benchmark")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
-    crops_path = PROJECT_ROOT / args.crops
+    crops_path = Path(args.crops)
+    if not crops_path.is_absolute():
+        crops_path = PROJECT_ROOT / crops_path
     if not (crops_path / "labels.jsonl").exists():
-        print(f"No crops at {crops_path}. Run: python tools/export_crops.py --out {args.crops}", file=sys.stderr)
+        print(f"No crops at {crops_path}. Make them first, in the service's venv:\n"
+              f"  python tools/export_crops.py --photo <your invoice photo> --out {args.crops}", file=sys.stderr)
         return 2
     crops = load_crops(crops_path)
-    print(f"{len(crops)} labelled crop(s) from {crops_path}.")
+    labelled = sum(row.get("text") is not None for row in crops)
+    print(f"{len(crops)} crop(s) from {crops_path} ({labelled} labelled). Mode: {args.mode}.")
 
-    models_dir = Path(args.models)
-    names = args.only or sorted(p.name for p in models_dir.iterdir() if p.is_dir())
+    gpu_layers = None if (args.gpu_layers or "auto").lower() == "auto" else args.gpu_layers
+    candidates = discover(Path(args.models), args.only)
+    if not candidates:
+        print(f"No models found under {args.models}.", file=sys.stderr)
+        return 2
 
     results: list[ModelResult] = []
-    for name in names:
-        print(f"\n== {name}")
-        result = run_model(models_dir / name, crops, args.max_crops)
+    for candidate in candidates:
+        print(f"\n== {candidate.name}", flush=True)
+        result = run_model(candidate, crops, args.max_crops, args.mode, args.llama_server, gpu_layers)
         if result.skipped_reason:
             print(f"   skipped: {result.skipped_reason}")
         else:
-            print(f"   {result.family} on {result.device}: mean CER {result.mean_cer}, "
-                  f"exact match {result.exact_match_rate}, {result.mean_seconds}s/crop")
+            print(f"   {result.family} on {result.device}: CER {result.mean_cer}, exact {result.exact_match_rate}, "
+                  f"passes validation {result.valid_rate}, {result.mean_seconds}s/crop (load {result.load_s}s)")
         results.append(result)
 
-    report = to_markdown(results)
-    out_dir = (PROJECT_ROOT / args.out).parent
-    out_dir.mkdir(parents=True, exist_ok=True)
-    Path(PROJECT_ROOT / (args.out + ".md")).write_text(report, encoding="utf-8")
-    Path(PROJECT_ROOT / (args.out + ".json")).write_text(
-        json.dumps([
-            {**r.__dict__, "mean_cer": r.mean_cer, "exact_match_rate": r.exact_match_rate,
-             "mean_seconds": r.mean_seconds, "per_crop": r.per_crop}
-            for r in results
-        ], ensure_ascii=False, indent=2, default=str),
+    out = Path(args.out)
+    if not out.is_absolute():
+        out = PROJECT_ROOT / out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.with_suffix(".md").write_text(to_markdown(results, args.mode, args.crops), encoding="utf-8")
+    out.with_suffix(".json").write_text(
+        json.dumps([{**r.summary(), "per_crop": r.per_crop} for r in results], ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
     )
-    print(f"\nReport: {args.out}.md")
+    out.with_suffix(".html").write_text(to_html(results, crops, args.mode, args.crops), encoding="utf-8")
+
+    ranked, by_cer = rank(results)
+    print("\nRanking (" + ("lowest CER first" if by_cer else "no labels: most readings passing validation first") + "):")
+    for i, r in enumerate(ranked, 1):
+        print(f"  {i}. {r.name}  CER={r.mean_cer}  valid={r.valid_rate}  {r.mean_seconds}s/crop")
+    print(f"\nReport: {out.with_suffix('.html')}")
     return 0
 
 

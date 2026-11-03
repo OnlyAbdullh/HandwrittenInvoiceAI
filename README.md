@@ -184,6 +184,40 @@ the paper (values exactly as written, ISO dates, plain numbers), and check that 
 totals sum to the invoice total. `tools/export_crops.py` will turn labelled invoices
 into a cell-crop dataset for fine-tuning the recognizer.
 
+### Choosing a model: comparing everything in `OCR_Models/`
+
+Two steps, because they need different virtualenvs. First cut the cells out of your own
+invoice photo exactly as the pipeline would (service venv):
+
+```powershell
+python tools\export_crops.py --photo C:\invoices\my_invoice.jpg --out datasets\my_invoice
+```
+
+Then run every model in `OCR_Models\` on those cells (the VLM venv, which has torch):
+
+```powershell
+qwen_venv\Scripts\python.exe tools\benchmark_recognizers.py --crops datasets\my_invoice
+qwen_venv\Scripts\python.exe tools\benchmark_recognizers.py --crops datasets\my_invoice --mode pipeline
+```
+
+and open `evaluation\reports\model_benchmark.html`: every cell beside every model's
+reading, and a ranked summary with speed, confidence and how often each model's
+reading passes the pipeline's own output validation.
+
+- **What it runs.** Chat VLMs (Qwen2/2.5/3-VL, Qwen3.5, GLM-OCR), Florence-2 and
+  TrOCR/Nougat run through transformers. Each GGUF quantization (`Q4_K_M`, `Q8_0`, ...)
+  runs through llama.cpp as its own entry. Anything else is listed as skipped, with the
+  reason.
+- **`--mode generic`** gives every model the same plain prompt — the fair comparison.
+- **`--mode pipeline`** reads each model the way the service would: the per-kind prompts,
+  the production Qwen runtime with its digit constraints, and the GGUF grammar.
+- **Scoring.** A photo's crops have no labels, so you judge the readings by eye. To get
+  real error rates (CER), type the correct text into `datasets\my_invoice\labels.jsonl`
+  (the `text` fields) and run again — or export with `--truth-file` using the
+  `evaluation/ground_truth` format.
+- **Useful options.** `--only nuqta qari` runs a subset, and `--max-crops 10` gives a
+  quick pass. `--gpu-layers` and `--llama-server` apply to GGUF models.
+
 ### Configuration
 
 `config/default_config.yaml` is what the service runs when a request sends no
