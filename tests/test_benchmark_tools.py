@@ -274,3 +274,21 @@ class TestIsolation:
     ])
     def test_native_crash_codes_are_named(self, bench, code, words):
         assert words in bench.describe_exit(code)
+
+
+class TestEmptyReadings:
+    def test_an_empty_reading_of_a_written_cell_is_a_miss_not_a_pass(self, bench, monkeypatch, tmp_path):
+        answers = iter(["", "EMPTY", "١٢", "وهو نائم"])
+
+        class Stub(bench.Reader):
+            def read(self, image, kind):
+                return next(answers), None
+
+        monkeypatch.setattr(bench, "build_reader", lambda *a, **k: Stub())
+        crops = [{"image": f"{i}.png", "kind": "number", "text": None, "pil": Image.new("RGB", (10, 10))} for i in range(4)]
+
+        result = bench.run_model(bench.Candidate("m", tmp_path, "chat_vlm"), crops, None, "generic", "", None)
+
+        assert [c["empty"] for c in result.per_crop] == [True, True, False, False]
+        assert [c["valid"] for c in result.per_crop] == [False, False, True, False]
+        assert result.empty_rate == 0.5 and result.valid_rate == 0.25

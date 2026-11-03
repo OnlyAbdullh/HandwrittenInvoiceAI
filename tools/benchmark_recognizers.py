@@ -152,6 +152,10 @@ def cer(predicted: str, expected: str | None) -> float | None:
     return round(levenshtein(normalize_text(predicted), truth) / len(truth), 3)
 
 
+def _is_empty(text: str) -> bool:
+    return not (text or "").strip() or (text or "").strip().upper() == "EMPTY"
+
+
 def passes_validation(text: str, kind: str) -> bool | None:
     """Whether the pipeline's own output validation would keep this reading.
 
@@ -530,6 +534,11 @@ class ModelResult:
         return round(sum(c["cer"] == 0.0 for c in scored) / len(scored), 3) if scored else None
 
     @property
+    def empty_rate(self) -> float | None:
+        checked = [c for c in self.per_crop if c.get("empty") is not None]
+        return round(sum(bool(c["empty"]) for c in checked) / len(checked), 3) if checked else None
+
+    @property
     def valid_rate(self) -> float | None:
         checked = [c for c in self.per_crop if c.get("valid") is not None]
         return round(sum(bool(c["valid"]) for c in checked) / len(checked), 3) if checked else None
@@ -547,7 +556,7 @@ class ModelResult:
             "name": self.name, "family": self.family, "device": self.device, "load_s": self.load_s,
             "skipped_reason": self.skipped_reason, "mean_cer": self.mean_cer,
             "exact_match_rate": self.exact_match_rate, "valid_rate": self.valid_rate,
-            "mean_seconds": self.mean_seconds, "mean_confidence": self.mean_confidence,
+            "empty_rate": self.empty_rate, "mean_seconds": self.mean_seconds, "mean_confidence": self.mean_confidence,
         }
 
 
@@ -594,7 +603,11 @@ def run_model(candidate: Candidate, crops: list[dict], max_crops: int | None, mo
                 "image": row["image"], "cell": row.get("cell"), "kind": row.get("kind"), "role": row.get("role"),
                 "expected": row.get("text"), "predicted": text,
                 "cer": None if errored else cer(text, row.get("text")),
-                "valid": False if errored else passes_validation(text, row.get("kind") or "any"),
+                # Every exported crop holds ink (the blank-cell gate dropped the
+                # rest), so an empty reading is a miss -- not a pass, even though
+                # the validator accepts "" as a legitimately blank cell.
+                "empty": not errored and _is_empty(text),
+                "valid": False if errored or _is_empty(text) else passes_validation(text, row.get("kind") or "any"),
                 "confidence": confidence, "seconds": seconds,
             })
     finally:
@@ -623,17 +636,17 @@ def to_markdown(results: list[ModelResult], mode: str, crops_dir: str) -> str:
         f"Crops: `{crops_dir}`. Mode: **{mode}**. {len(results)} model(s); {len(ranked)} ran, {len(skipped)} skipped.",
         "",
         ("Ranked by character error rate against the labels." if labelled else
-         "**The crops have no labels**, so models are ranked by how often their reading passes the "
-         "pipeline's output validation -- a sanity check, not accuracy. Judge the readings in the HTML "
+         "**The crops have no labels**, so models are ranked by how often they give a usable reading -- "
+         "not empty, and accepted by the pipeline's output validation. A sanity check, not accuracy. Judge the readings in the HTML "
          "report, or fill in `text` in labels.jsonl and run again for real scores."),
         "",
-        "| Rank | Model | Family | Device | Mean CER | Exact match | Passes validation | Mean confidence | Mean s/crop | Load s |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "| Rank | Model | Family | Device | Mean CER | Exact match | Usable reading | Empty | Mean confidence | Mean s/crop | Load s |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for i, r in enumerate(ranked, 1):
         lines.append(
             f"| {i} | {r.name} | {r.family} | {r.device} | {r.mean_cer} | {r.exact_match_rate} | "
-            f"{r.valid_rate} | {r.mean_confidence} | {r.mean_seconds} | {r.load_s} |"
+            f"{r.valid_rate} | {r.empty_rate} | {r.mean_confidence} | {r.mean_seconds} | {r.load_s} |"
         )
     if skipped:
         lines += ["", "## Skipped", "", "| Model | Reason |", "|---|---|"]
@@ -664,6 +677,7 @@ def to_html(results: list[ModelResult], crops: list[dict], mode: str, crops_dir:
         f"<td>{r.mean_cer if r.mean_cer is not None else '–'}</td>"
         f"<td>{r.exact_match_rate if r.exact_match_rate is not None else '–'}</td>"
         f"<td>{r.valid_rate if r.valid_rate is not None else '–'}</td>"
+        f"<td>{r.empty_rate if r.empty_rate is not None else '–'}</td>"
         f"<td>{r.mean_confidence if r.mean_confidence is not None else '–'}</td>"
         f"<td>{r.mean_seconds}</td><td>{r.load_s}</td></tr>"
         for i, r in enumerate(ranked, 1)
@@ -698,8 +712,8 @@ def to_html(results: list[ModelResult], crops: list[dict], mode: str, crops_dir:
         )
 
     note = ("Ranked by character error rate against the labels." if labelled else
-            "These crops have no labels: ranked by how often a reading passes the pipeline's output "
-            "validation, which is a sanity check, not accuracy. Judge the readings below, or type the "
+            "These crops have no labels: ranked by how often a model gives a usable reading (not empty, "
+            "and accepted by the pipeline's output validation) -- a sanity check, not accuracy. Judge the readings below, or type the "
             "correct text into labels.jsonl and run again.")
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>OCR model bake-off</title>
 <style>
@@ -714,7 +728,7 @@ td div{{font-size:18px}} small{{color:#666}} .ok{{background:#e3f6e3}} .near{{ba
 Struck-through readings are ones the pipeline's output validation would reject.</p>
 <h2>Summary</h2>
 <table><tr><th>Rank</th><th>Model</th><th>Family</th><th>Device</th><th>Mean CER</th><th>Exact match</th>
-<th>Passes validation</th><th>Mean confidence</th><th>Mean s/crop</th><th>Load s</th></tr>{summary_rows}</table>
+<th>Usable reading</th><th>Empty</th><th>Mean confidence</th><th>Mean s/crop</th><th>Load s</th></tr>{summary_rows}</table>
 {"<h2>Skipped</h2><table><tr><th>Model</th><th>Reason</th></tr>" + skipped_rows + "</table>" if skipped_rows else ""}
 <h2>Every reading</h2>
 <div class="scroll"><table><tr><th>Crop</th>{header}</tr>{"".join(body)}</table></div>
@@ -866,15 +880,15 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"   skipped: {result.skipped_reason}")
             else:
                 print(f"   {result.family} on {result.device}: CER {result.mean_cer}, exact {result.exact_match_rate}, "
-                      f"passes validation {result.valid_rate}, {result.mean_seconds}s/crop (load {result.load_s}s)")
+                      f"usable {result.valid_rate}, empty {result.empty_rate}, {result.mean_seconds}s/crop (load {result.load_s}s)")
             results.append(result)
             # After every model: a run interrupted later still leaves a report.
             write_reports(out, results, crops, args.mode, args.crops)
 
     ranked, by_cer = rank(results)
-    print("\nRanking (" + ("lowest CER first" if by_cer else "no labels: most readings passing validation first") + "):")
+    print("\nRanking (" + ("lowest CER first" if by_cer else "no labels: most usable readings first") + "):")
     for i, r in enumerate(ranked, 1):
-        print(f"  {i}. {r.name}  CER={r.mean_cer}  valid={r.valid_rate}  {r.mean_seconds}s/crop")
+        print(f"  {i}. {r.name}  CER={r.mean_cer}  usable={r.valid_rate}  empty={r.empty_rate}  {r.mean_seconds}s/crop")
     print(f"\nReport: {out.with_suffix('.html')}")
     return 0
 
