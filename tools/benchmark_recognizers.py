@@ -203,7 +203,9 @@ def classify(model_dir: Path) -> tuple[str, str | None, str]:
     """(family, skip_reason, model_type). family is "" when skip_reason is set."""
     config_path = model_dir / "config.json"
     if not config_path.exists():
-        return "", "no config.json (not a transformers model, or an incomplete download)", ""
+        files = sorted(p.name for p in model_dir.iterdir())[:8] if model_dir.is_dir() else []
+        return "", (f"no config.json (not a transformers model, or an incomplete download); "
+                    f"contains: {', '.join(files) or 'nothing'}"), ""
 
     try:
         config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -219,6 +221,20 @@ def classify(model_dir: Path) -> tuple[str, str | None, str]:
     if archs & _ENCODER_DECODER_ARCHES:
         return "encoder_decoder", None, model_type
     return "", f"unrecognized architecture(s) {sorted(archs) or '(none)'}", model_type
+
+
+def model_root(folder: Path) -> Path:
+    """Where the model's config.json actually is.
+
+    Downloads are not always flat: a repository cloned into a folder of the same
+    name, or a checkpoint kept in a subfolder, puts config.json one or two
+    levels down. One unambiguous match is used; several (or none) leave the
+    folder as it is, to be reported.
+    """
+    if (folder / "config.json").exists():
+        return folder
+    found = sorted({p.parent for depth in ("*/config.json", "*/*/config.json") for p in folder.glob(depth)})
+    return found[0] if len(found) == 1 else folder
 
 
 def discover(models_dir: Path, only: list[str] | None) -> list[Candidate]:
@@ -238,8 +254,9 @@ def discover(models_dir: Path, only: list[str] | None) -> list[Candidate]:
                 candidates.append(Candidate(f"{folder.name} [{model.stem}]", model, "gguf", mmproj=projectors[0]))
             continue
 
-        family, reason, model_type = classify(folder)
-        candidates.append(Candidate(folder.name, folder, family, model_type=model_type, skipped_reason=reason))
+        root = model_root(folder)
+        family, reason, model_type = classify(root)
+        candidates.append(Candidate(folder.name, root, family, model_type=model_type, skipped_reason=reason))
 
     if only:
         wanted = [w.lower() for w in only]

@@ -153,11 +153,19 @@ def export_labelled(page: PreparedPage, truth: InvoiceTruth, source: str, stem: 
     ]
 
     if len(filled_rows) != len(truth.items):
+        # The item rows cannot be paired with the truth's items without risking
+        # labels pasted onto the wrong cells. The header fields do not depend
+        # on that pairing, so they keep their labels; item cells go out
+        # unlabelled rather than not at all.
         print(
-            f"  skipped: {len(filled_rows)} filled item row(s) detected but the truth has "
-            f"{len(truth.items)}; fix the layout or the truth before exporting."
+            f"  {len(filled_rows)} filled item row(s) detected but the truth has {len(truth.items)}: "
+            "item cells exported unlabelled, header fields labelled."
         )
-        return []
+        headers = header_labels(truth)
+        rows_out = export_unlabelled(page, source, stem, out_dir)
+        for row in rows_out:
+            row["text"] = headers.get(CellRole(row["role"]))
+        return rows_out
 
     labelled: list[tuple[object, str, str]] = []
     for region in page.layout.regions:
@@ -273,8 +281,10 @@ def main(argv: list[str] | None = None) -> int:
         with (out_dir / "labels.jsonl").open("w", encoding="utf-8") as sink:
             for row in rows:
                 sink.write(json.dumps(row, ensure_ascii=False) + "\n")
-        state = "labelled" if truth else "unlabelled (text: null -- fill in to have models scored)"
-        print(f"\n{len(rows)} {state} crop(s) written to {out_dir}")
+        labelled = sum(row["text"] is not None for row in rows)
+        print(f"\n{len(rows)} crop(s) written to {out_dir}, {labelled} of them labelled.")
+        if labelled < len(rows):
+            print("Unlabelled crops have text: null in labels.jsonl -- type the right answer in to have them scored.")
         return 0 if rows else 1
 
     total = 0

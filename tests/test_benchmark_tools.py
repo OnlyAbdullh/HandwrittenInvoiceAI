@@ -90,6 +90,22 @@ class TestDiscovery:
         assert "no config.json" in found["Ali0044-Qalam_Net_V2"].skipped_reason
         assert "unrecognized architecture" in found["Mystery-Model"].skipped_reason
 
+    def test_a_model_kept_in_a_subfolder_is_found(self, bench, models_dir):
+        nested = models_dir / "gagan3012-Florence-2-FT-ArabicOCR"
+        inner = nested / "checkpoint"
+        inner.mkdir()
+        (nested / "config.json").rename(inner / "config.json")
+
+        found = {c.name: c for c in bench.discover(models_dir, None)}
+
+        assert found["gagan3012-Florence-2-FT-ArabicOCR"].family == "florence2"
+        assert found["gagan3012-Florence-2-FT-ArabicOCR"].path == inner
+
+    def test_a_folder_without_a_model_says_what_it_contains(self, bench, models_dir):
+        (models_dir / "Ali0044-Qalam_Net_V2" / "model.h5").write_bytes(b"")
+        found = {c.name: c for c in bench.discover(models_dir, None)}
+        assert "contains: model.h5" in found["Ali0044-Qalam_Net_V2"].skipped_reason
+
     def test_only_filters_by_name(self, bench, models_dir):
         names = [c.name for c in bench.discover(models_dir, ["nuqta", "qari"])]
         assert names == [
@@ -207,7 +223,7 @@ class TestTruthLookup:
         assert rows and all(row["text"] for row in rows)
         assert {"00010", "12", "بوري شبابي زارا"} <= {row["text"] for row in rows}
 
-    def test_truth_that_does_not_fit_the_table_falls_back_to_unlabelled(self, export, tmp_path):
+    def test_rows_that_cannot_be_aligned_keep_their_header_labels(self, export, tmp_path):
         photo = self._truth(tmp_path, items=4)  # four items, ten written rows: cannot be aligned
         out = tmp_path / "crops"
 
@@ -215,4 +231,9 @@ class TestTruthLookup:
                             "--config", "config/nuqta_config.yaml"]) == 0
 
         rows = [json.loads(line) for line in (out / "labels.jsonl").read_text(encoding="utf-8").splitlines()]
-        assert len(rows) == 57 and all(row["text"] is None for row in rows)
+        by_role = {row["role"]: row["text"] for row in rows}
+        assert len(rows) == 57  # every readable cell is still there to compare models on
+        assert by_role["invoice_number"] == "00010"
+        assert by_role["merchant_name"] == "حسام المارديني"
+        assert by_role["total_in_figures"] == "120"
+        assert all(row["text"] is None for row in rows if row["role"] in ("quantity", "product_name"))
