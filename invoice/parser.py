@@ -218,7 +218,7 @@ class InvoiceParser:
 
         # Invoice number: keep it as the string it was printed as. Leading zeros
         # are part of "00008" and parsing it as a number would eat them.
-        return ExtractedValue(value=text, confidence=confidence, bbox=bbox)
+        return ExtractedValue(value=_strip_number_sign(text), confidence=confidence, bbox=bbox)
 
     def _items_from_roles(
         self, cells: list[TableCellElement], catalogs: Catalogs
@@ -736,6 +736,17 @@ def _best_by_role(document: StructuredDocument, role: CellRole) -> DocumentEleme
 
     populated = [el for el in candidates if _strip_label(el.merged_text)]
     return populated[0] if populated else candidates[0]
+
+
+# A printed number sign before the number: "№", "No.", "N°", "#", or the "№"
+# as these models read it ("N/", "N:", "Nº"). Form B prints "№ 0001901" with no
+# colon, so _strip_label cannot take it off, and it came back as "N/ 0001901".
+_NUMBER_SIGN = re.compile(r"^\s*(?:№|#|N\s*[oº°]?\s*[./:\-]?)\s*(?=[0-9٠-٩۰-۹])", re.IGNORECASE)
+
+
+def _strip_number_sign(text: str) -> str:
+    """The invoice number without a printed number sign in front of it."""
+    return _NUMBER_SIGN.sub("", text, count=1).strip()
 
 
 def _strip_label(text: str) -> str:

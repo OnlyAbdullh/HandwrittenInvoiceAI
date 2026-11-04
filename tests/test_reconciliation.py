@@ -257,3 +257,69 @@ def digit_only(text):
     from string_matching.normalization import digit_sequence
 
     return digit_sequence(text)
+
+
+class TestHandwrittenMisreads:
+    """Rows as the laptop read them (Arabic-Qwen3.5-OCR-v4 on bills/sahror and
+    bills/onlyone), and what each must become. The readings are real."""
+
+    @staticmethod
+    def _row(raw):
+        from string_matching.normalization import parse_number_strict
+
+        item = InvoiceLineItem(row_index=0)
+        item.quantity, item.unit_price, item.total_price = (
+            ExtractedValue(value=parse_number_strict(r), confidence=0.9, raw=r) for r in raw
+        )
+        return item
+
+    @pytest.mark.parametrize(("raw", "truth"), [
+        # a run of dot-zeros counted one short, and "13250" never read as 1325.0
+        (("16", "١٣٢٥٠", "٢١٢٠٠"), (16, 13250, 212000)),
+        # the decimal comma read as a zero, and a digit misread in the total
+        (("192", "٥٠٧", "1٠٤٠٤"), (192, 5.7, 1094.4)),
+        # the dot-shaped zero read as a separator
+        (("192", "٥٠٧", "1.٩٤٤"), (192, 5.7, 1094.4)),
+        (("87", "٥٠٩٥", "517.65"), (87, 5.95, 517.65)),
+        # the total misread: the other two cells, taken as read, say what it is
+        (("16", "13250", "١٢٠٠"), (16, 13250, 212000)),
+    ])
+    def test_the_row_comes_out_right(self, raw, truth):
+        draft = reconcile(InvoiceDraft(line_items=[self._row(raw)]))
+        item = draft.line_items[0]
+        assert (item.quantity.value, item.unit_price.value, item.total_price.value) == pytest.approx(truth)
+        assert item.arithmetic_ok
+
+    def test_a_digit_correction_is_flagged_for_review(self):
+        draft = reconcile(InvoiceDraft(line_items=[self._row(("87", "٥٠٩٥", "517.65"))]))
+        flagged = [w.field for w in draft.warnings if w.code == WarningCodes.MANUAL_REVIEW_REQUIRED]
+        assert flagged == ["line_items[0].unit_price"]
+
+    def test_a_separator_or_dot_run_repair_is_not_flagged(self):
+        separator = self._row(("87", "٥,٩٥", "٥١٧٦٥"))
+        dots = self._row(("16", "13250", "212..."))
+        draft = reconcile(InvoiceDraft(line_items=[separator, dots]))
+        assert (separator.unit_price.value, separator.total_price.value) == (5.95, 517.65)
+        assert dots.total_price.value == 212000.0
+        assert not [w for w in draft.warnings if w.code == WarningCodes.MANUAL_REVIEW_REQUIRED]
+
+    def test_running_twice_does_not_duplicate_the_flag(self):
+        draft = InvoiceDraft(line_items=[self._row(("87", "٥٠٩٥", "517.65"))])
+        reconcile(draft)
+        reconcile(draft)
+        assert len([w for w in draft.warnings if w.code == WarningCodes.MANUAL_REVIEW_REQUIRED]) <= 1
+
+    def test_a_row_that_already_multiplies_out_is_left_alone(self):
+        # Wrong on the paper (200 x 6 = 1200) but consistent as read: arithmetic
+        # cannot see it, and must not invent a different consistent row.
+        draft = reconcile(InvoiceDraft(line_items=[self._row(("6", "٢٠١", "١٢٠٦"))]))
+        item = draft.line_items[0]
+        assert (item.unit_price.value, item.total_price.value) == (201.0, 1206.0)
+
+    def test_a_decimal_part_of_zeros_is_never_inserted(self):
+        from invoice.reconciliation import handwriting_candidates
+
+        assert 1325.0 not in handwriting_candidates("١٣٢٥٠")
+        assert 5.7 in handwriting_candidates("٥٠٧")
+        assert 1094.4 in handwriting_candidates("1.٩٤٤")
+        assert 212000.0 in handwriting_candidates("٢١٢٠٠")

@@ -12,6 +12,13 @@ and a JSON report under `evaluation/reports/`.
 Run it before and after every change meant to improve accuracy. A change that
 was not measured here has not been shown to help -- with two labelled invoices
 it has barely been shown at all, so label more (README: "Labelling invoices").
+
+    python tools/evaluate.py --perfect-readings datasets/sahror datasets/onlyone
+
+runs the same pipeline with every cell "read" as its label from those
+`tools/export_crops.py` folders, instead of by a model. What is still wrong
+then is the layout, the parser or the arithmetic -- not recognition. No model
+is loaded, so it runs anywhere.
 """
 
 from __future__ import annotations
@@ -31,12 +38,52 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.loader import load_config  # noqa: E402
+from core.domain.ocr import Recognition  # noqa: E402
 from core.domain.catalog import Catalogs, NamedEntry  # noqa: E402
 from core.domain.image_payload import ImagePayload  # noqa: E402
 from evaluation.metrics import InvoiceScore, score_invoice, summarize, to_markdown  # noqa: E402
 from evaluation.resources import process_tree_memory  # noqa: E402
 from evaluation.schema import EvaluationCatalog, InvoiceTruth  # noqa: E402
+from ocr.recognizers.registry import recognizer_registry  # noqa: E402
 from orchestration.pipeline_orchestrator import PipelineOrchestrator  # noqa: E402
+
+PERFECT_READINGS = "perfect_readings"
+
+
+class PerfectReadings:
+    """Reads each crop as its label in an export folder: what the invoice
+    would be if recognition were perfect. Only this tool registers it; the
+    service can never select it."""
+
+    name = PERFECT_READINGS
+    labels: dict[str, str | None] = {}  # region id suffix -> label, for the invoice being run
+    unlabelled: list[str] = []
+
+    def __init__(self, **_):
+        pass
+
+    def read(self, crop) -> Recognition:
+        return self.read_all([crop])[0]
+
+    def read_all(self, crops) -> list[Recognition]:
+        out = []
+        for crop in crops:
+            key = (crop.region.source_id or "").split(":")[-1]
+            text = PerfectReadings.labels.get(key)
+            if text is None:
+                PerfectReadings.unlabelled.append(key)
+            out.append(Recognition(text or "", confidence=1.0))
+        return out
+
+
+def load_export_labels(folder: Path) -> dict[str, str | None]:
+    """Region id suffix (r3c1, u0, ...) -> label, from an export's labels.jsonl."""
+    labels: dict[str, str | None] = {}
+    for line in (folder / "labels.jsonl").read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            row = json.loads(line)
+            labels[Path(row["image"]).stem.rsplit("_", 1)[-1]] = row.get("text")
+    return labels
 
 
 def load_catalogs(path: Path) -> Catalogs:
@@ -96,6 +143,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--catalog", default="evaluation/catalog.json")
     p.add_argument("--out", default="evaluation/reports")
     p.add_argument("--label", default=None, help="name for this run in the report file name")
+    p.add_argument("--perfect-readings", nargs="+", type=Path, metavar="EXPORT_DIR",
+                   help="read every cell as its label from these export_crops folders (one per invoice, "
+                        "named like the invoice's folder under bills/) instead of with the model")
     return p.parse_args()
 
 
@@ -119,6 +169,14 @@ def main() -> int:
 
     catalogs = load_catalogs(Path(args.catalog))
 
+    exports: dict[str, Path] = {}
+    if args.perfect_readings:
+        recognizer_registry.register(PERFECT_READINGS)(PerfectReadings)
+        config.ocr.recognizer.name = PERFECT_READINGS
+        config.ocr.recognizer.params = {}
+        exports = {folder.name: folder for folder in args.perfect_readings}
+        args.label = args.label or "perfect-readings"
+
     started = time.perf_counter()
     orchestrator = PipelineOrchestrator(config)
     orchestrator.warmup()  # load the model now, so load time and per-invoice time are not mixed
@@ -135,6 +193,16 @@ def main() -> int:
             scores.append(InvoiceScore(image=truth.image, form=truth.form, error=f"cannot read {image_path}"))
             print(" missing")
             continue
+
+        if args.perfect_readings:
+            folder = exports.get(Path(truth.image).parent.name)
+            if folder is None:
+                scores.append(InvoiceScore(image=truth.image, form=truth.form,
+                                           error=f"no export folder named {Path(truth.image).parent.name!r}"))
+                print(" no export folder")
+                continue
+            PerfectReadings.labels = load_export_labels(folder)
+            PerfectReadings.unlabelled = []
 
         t0 = time.perf_counter()
         try:
@@ -153,6 +221,8 @@ def main() -> int:
         )
         scores.append(score)
         print(f" {seconds:.1f}s")
+        if args.perfect_readings and PerfectReadings.unlabelled:
+            print(f"    read as empty (no label in the export): {', '.join(PerfectReadings.unlabelled)}")
 
     # Measured while the model (and any llama-server or worker it started) is
     # still alive: a child's peak cannot be read once it has exited.

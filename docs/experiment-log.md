@@ -304,6 +304,76 @@ or came from a row the layout missed.
 
 **Not measured yet** with the models.
 
+### 2026-11-04 · After the form-B crop fixes
+- **Where:** laptop, CUDA. 41 labelled cells.
+- **Result, per cell:**
+
+  | Model | CER | Exact | s/cell |
+  |---|---|---|---|
+  | **Arabic-Qwen3.5-OCR-v4** | **0.189** (from 0.276) | **0.366** | 1.05 |
+  | Nuqta Q8_0 | 0.259 | 0.317 | 4.74 |
+  | Nuqta Q4_K_M | 0.280 | 0.317 | 2.68 |
+  | Qwen2.5-VL-3B 4-bit v3 | 0.298 (from 0.423) | 0.293 | 0.95 |
+
+  Qwen3-VL-2B and Qari crashed natively this run (access violation); the
+  benchmark isolates that.
+
+  The crop fix helped every model on form B. Qwen3.5 is again clearly first.
+- **Result, invoice evaluation:**
+  - header 5/9 (the `onlyone` date is now right);
+  - numeric 12/24;
+  - product top-1 8/8;
+  - **11 phantom rows** on `onlyone`, and 66 model calls instead of about 23.
+- **The per-number table showed why each number failed** (raw readings):
+  - **Decimal comma read as a zero:** `٥٠٧` for 5.7 and `٥٠٩٥` for 5.95.
+  - **Dot-shaped zero read as a separator:** `1.٩٤٤` for 1094.4.
+  - **Dot-zeros counted short:** `٢١٢٠٠` for 212000, `١٢٠` for 1200.
+  - **A wrong decimal point inserted:** `١٣٢٥٠` became 1325.0, because 16 ×
+    1325.0 = 21200 matched the short total.
+  - **Plain misreads:** `٥٠` for 200, `٢٠١ × 6 = ١٢٠٦` for 200 × 6 = 1200.
+
+### 2026-11-04 · Phantom rows, number repair, invoice-number sign
+Cloud, real photos, with the laptop's readings replayed. Not yet measured with a
+model.
+
+- **Phantom rows: the blank-cell gate counted the dotted rule.** Moving form B's
+  item boxes down put each row's dotted rule, and the table's bottom rule, inside
+  the measured interior. All 11 empty rows then looked written. The gate now
+  counts only *strokes*: ink left after straight rules are removed by
+  morphological opening, in pieces at least 20% of the cell's height (capped at
+  14 px).
+  - Measured, both photos: empty cells ≤ 0.0064, the faintest written cell
+    0.022, against the 0.01 threshold.
+  - `onlyone` now sends no empty row.
+- **Perfect-readings check** (`evaluate.py --perfect-readings`): with every
+  cell read as its label, both invoices come out 100% right (9/9 header, 24/24
+  numbers, 0 phantom rows). Layout, parser and arithmetic are sound, and every
+  remaining error is recognition. Three unclassified boxes on form B are still
+  read (3 model calls); their readings do not affect the result.
+- **Number repair**, replaying the 8 rows the laptop read:
+
+  | | Before | After |
+  |---|---|---|
+  | Rows right | 2 | **6** |
+
+  - New candidate values from the misreads above:
+    - an interior ٠ may be the decimal comma;
+    - a dot between digits may be a zero;
+    - a reading ending in zeros may have lost one.
+  - A reading without a separator never gets a decimal part of zeros, so
+    `13250` is never 1325.0.
+  - When no combination fits, every cell is tried as the misread one, not just
+    the longest. The closest unique explanation wins, and the cells it used are
+    written back too.
+  - A correction that changes digits, not just the separator, raises
+    `MANUAL_REVIEW_REQUIRED` on that cell: the row now adds up, so nothing else
+    would flag it.
+  - Still wrong: `٥٠` for 200 becomes 20 (one digit off its reading, flagged), and
+    `٢٠١ × 6 = ١٢٠٦` is self-consistent, so arithmetic cannot see it. With
+    perfect readings, nothing changes.
+- **Invoice number:** a printed number sign (`№`, read as `N/`) is stripped:
+  `N/ 0001901` → `0001901`.
+
 ### Pending: needs the laptop
 - Re-export both invoices at the working resolution (`export_crops.py` should
   now print `read at ...x2000` and 41 labelled cells), re-run the benchmark on

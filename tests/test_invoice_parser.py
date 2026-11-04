@@ -495,6 +495,17 @@ class TestLabelledLayout:
         draft = InvoiceParser().parse(self.document(), ocr())
         assert draft.header.invoice_number.value == "00008"
 
+    @pytest.mark.parametrize("reading", ["N/ 0001901", "№ 0001901", "No. 0001901", "Nº0001901", "#0001901"])
+    def test_a_printed_number_sign_is_not_part_of_the_number(self, reading):
+        from invoice.parser import _strip_number_sign
+
+        assert _strip_number_sign(reading) == "0001901"
+
+    def test_a_word_before_a_number_is_left_alone(self):
+        from invoice.parser import _strip_number_sign
+
+        assert _strip_number_sign("Nasr 12") == "Nasr 12"
+
     def test_every_header_field_carries_the_box_it_was_read_from(self):
         """The point of the whole layout stage: clicking the merchant field on
         the verification screen highlights the box the value came from, not a

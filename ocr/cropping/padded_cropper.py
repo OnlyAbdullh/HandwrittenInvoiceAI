@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -42,6 +43,8 @@ class PaddedRegionCropper:
         min_ink_ratio: float = 0.0,
         ink_delta: int = 30,
         ink_inset: int = 8,
+        min_stroke_height: float = 0.2,
+        max_stroke_px: int = 14,
     ):
         if upscale < 1:
             raise ValueError(f"padded_crop upscale must be >= 1, got {upscale}.")
@@ -61,15 +64,53 @@ class PaddedRegionCropper:
         # filled cell.
         self.ink_inset = ink_inset
 
+        # Blankness counts only *strokes*: ink left after straight rules are
+        # removed, in connected pieces at least this fraction of the interior's
+        # height. A form whose rows are printed as dotted lines (form B) puts
+        # the dots -- 20-35 px specks -- and the table's bottom rule into the
+        # interior of a cell moved down onto its writing; counted as ink they
+        # made all 11 empty rows of bills/onlyone "written" (66 model calls,
+        # 11 phantom rows). Measured on both real forms: empty cells <= 0.0064,
+        # the faintest written cell 0.022. 0 counts every ink pixel, as before.
+        # The height test is capped at `max_stroke_px` (at the 2000 px working
+        # resolution), so small writing in a tall header box still counts; the
+        # dotted rule's specks are 5 px tall.
+        if not 0.0 <= min_stroke_height < 1.0:
+            raise ValueError(f"padded_crop min_stroke_height must be in [0, 1), got {min_stroke_height}.")
+        if max_stroke_px < 1:
+            raise ValueError(f"padded_crop max_stroke_px must be >= 1, got {max_stroke_px}.")
+        self.min_stroke_height = float(min_stroke_height)
+        self.max_stroke_px = int(max_stroke_px)
+
     def ink_ratio(self, patch: np.ndarray) -> float:
         gray = patch if patch.ndim == 2 else patch[..., :3].mean(axis=2)
         paper = np.percentile(gray, 85)
         return float((gray < paper - self.ink_delta).mean())
 
+    def stroke_ratio(self, patch: np.ndarray) -> float:
+        """Fraction of the patch covered by handwriting-sized strokes: ink,
+        less straight rules, in pieces at least `min_stroke_height` of the patch
+        tall (or `max_stroke_px`, whichever is smaller)."""
+        gray = patch if patch.ndim == 2 else patch[..., :3].mean(axis=2)
+        paper = np.percentile(gray, 85)
+        mask = (gray < paper - self.ink_delta).astype(np.uint8)
+        if self.min_stroke_height <= 0 or not mask.any():
+            return float(mask.mean())
+
+        height, width = mask.shape
+        horizontal = cv2.getStructuringElement(cv2.MORPH_RECT, (max(15, int(0.4 * width)), 1))
+        vertical = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(15, int(0.5 * height))))
+        rules = cv2.morphologyEx(mask, cv2.MORPH_OPEN, horizontal) | cv2.morphologyEx(mask, cv2.MORPH_OPEN, vertical)
+        strokes = mask & (1 - rules)
+
+        count, _, stats, _ = cv2.connectedComponentsWithStats(strokes, connectivity=8)
+        tall = stats[1:count, cv2.CC_STAT_HEIGHT] >= min(self.min_stroke_height * height, self.max_stroke_px)
+        return float(stats[1:count, cv2.CC_STAT_AREA][tall].sum() / mask.size)
+
     def _is_blank(self, page: np.ndarray, box) -> bool:
         inset = min(self.ink_inset, box.w // 4, box.h // 4)
         interior = page[box.y + inset : box.y + box.h - inset, box.x + inset : box.x + box.w - inset]
-        return interior.size == 0 or self.ink_ratio(interior) < self.min_ink_ratio
+        return interior.size == 0 or self.stroke_ratio(interior) < self.min_ink_ratio
 
     def crop(
         self, image: ImagePayload, regions: Sequence[TextRegion]

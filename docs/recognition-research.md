@@ -173,6 +173,13 @@ The top three are within about one cell of each other. Qwen3.5 stays the default
 it reads the most numbers exactly, is 5× faster than Nuqta Q8, and fits the 4 GB
 GPU. A whole invoice takes 17 s with it.
 
+**After form B's crops were fixed** (same 41 cells): Qwen3.5-OCR-v4 **0.189** CER
+(exact 0.366, 1.05 s/cell), Nuqta Q8 0.259, Nuqta Q4 0.280, Qwen2.5-VL-3B 0.298.
+Qwen3.5 is clearly first again.
+
+With every cell read perfectly (`evaluate.py --perfect-readings`), both invoices
+come out 100% right. All remaining error is recognition.
+
 **What these numbers can and cannot say:**
 
 - **The data is small.** 20 cells means one cell is 5 points of exact-match, so ranks

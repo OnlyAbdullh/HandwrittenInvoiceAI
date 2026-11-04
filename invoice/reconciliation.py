@@ -129,6 +129,74 @@ def dot_run_candidates(raw: str | None) -> list[str]:
     return sequences
 
 
+def handwriting_candidates(raw: str | None) -> list[float]:
+    """Values an amount's reading may stand for, from how handwritten Arabic
+    figures are misread -- each one observed on the real invoices:
+
+    * **the decimal comma read as a zero.** "٥,٩٥" came back as "٥٠٩٥" and
+      "٥,٧٠" as "٥٠٧": the separator is a small mark beside the digits, and so
+      is the dot-shaped zero "٠". An interior zero may be the separator, when
+      the reading shows no separator of its own.
+    * **the dot-shaped zero read as a separator.** "١٠٩٤,٤" came back as
+      "1.٩٤٤": a dot between digits may be the zero.
+    * **a run of dot-zeros counted short.** "٢١٢..." (212000) came back as
+      "٢١٢٠٠", "١٢.." as "١٢٠". A reading ending in zeros may have lost one.
+      Never the reverse: no reading was seen to gain a zero.
+
+    The equation, not this list, decides; these only make the right value
+    available to it.
+    """
+    text = fold_latin_lookalikes(fold_digits(raw or "")).strip()
+    digits = digit_sequence(text)
+    if not digits:
+        return []
+
+    values: list[float] = []
+
+    def add(value: float) -> None:
+        if value not in values:
+            values.append(value)
+
+    has_separator = observed_decimals(raw) is not None
+    if not has_separator:
+        for i in range(1, len(digits) - 1):
+            decimals = len(digits) - i - 1
+            if digits[i] == "0" and decimals <= MAX_DECIMALS and set(digits[i + 1:]) != {"0"}:
+                add(float(f"{digits[:i]}.{digits[i + 1:]}"))
+
+    for match in re.finditer(r"(?<=\d)[.·](?=\d)", text):
+        zeroed = digit_sequence(text[: match.start()] + "0" + text[match.end():])
+        for value in _scaled(zeroed, has_separator=False):
+            add(value)
+
+    if digits.endswith("0") and not re.search(r"[.…]\s*$", text):
+        for value in _scaled(digits + "0", has_separator=False):
+            add(value)
+    return values
+
+
+def _scaled(sequence: str, has_separator: bool) -> list[float]:
+    """decimal_candidates, less the placements a reading without a separator
+    cannot mean: "13250" is never 1325.0 -- nobody writes a decimal part of
+    zeros without writing the separator before it."""
+    if has_separator:
+        return decimal_candidates(sequence)
+    return [
+        value for places, value in _placements(sequence)
+        if places == 0 or set(sequence[-places:]) != {"0"}
+    ]
+
+
+def _placements(sequence: str) -> list[tuple[int, float]]:
+    out: list[tuple[int, float]] = []
+    for places in range(MAX_DECIMALS + 1):
+        if places == 0:
+            out.append((0, float(sequence)))
+        elif len(sequence) > places:
+            out.append((places, float(f"{sequence[:-places]}.{sequence[-places:]}")))
+    return out
+
+
 def _pool(cell: _Cell, integral: bool) -> list[float]:
     """Every value this cell could hold, best-guess order.
 
@@ -140,11 +208,15 @@ def _pool(cell: _Cell, integral: bool) -> list[float]:
     if integral:
         return [float(sequence) for sequence in sequences if sequence]
 
+    has_separator = observed_decimals(cell.raw) is not None
     values: list[float] = []
     for sequence in sequences:
-        for value in decimal_candidates(sequence):
+        for value in _scaled(sequence, has_separator):
             if value not in values:
                 values.append(value)
+    for value in handwriting_candidates(cell.raw):
+        if value not in values:
+            values.append(value)
 
     return values
 
@@ -286,13 +358,27 @@ def reconcile(draft: InvoiceDraft) -> InvoiceDraft:
     # derives makes its row multiply out by construction, which verifies
     # nothing, so only these rows can vouch for the invoice total.
     fully_read = [all(_has_reading(f) for f in (i.quantity, i.unit_price, i.total_price)) for i in draft.line_items]
+    draft.warnings = [w for w in draft.warnings if not _is_row_correction(w)]
     for item in draft.line_items:
-        _reconcile_row(item)
+        for name, raw, value in _reconcile_row(item):
+            # The digits changed, not only the separator: the row now adds up,
+            # so nothing else would ask anyone to look at it.
+            draft.warnings.append(InvoiceWarning(
+                code=WarningCodes.MANUAL_REVIEW_REQUIRED,
+                field=f"line_items[{item.row_index}].{name}",
+                message=(f"Row {item.row_index + 1}: {name} was read as '{raw}' and corrected to {value} "
+                         "so that quantity x unit price = line total. Confirm it against the paper."),
+            ))
 
     _reconcile_total(draft, rows_verified=all(fully_read))
     _refresh_arithmetic_warnings(draft)
     _refresh_total_warning(draft)
     return draft
+
+
+def _is_row_correction(warning: InvoiceWarning) -> bool:
+    return (warning.code == WarningCodes.MANUAL_REVIEW_REQUIRED and warning.field is not None
+            and warning.field.startswith("line_items[") and "corrected to" in warning.message)
 
 
 def _has_reading(field) -> bool:
@@ -432,7 +518,7 @@ def _write_back(item: InvoiceLineItem, name: str, value: float) -> None:
     field.value = int(round(value)) if name == "quantity" else round(value, 2)
 
 
-def _reconcile_row(item: InvoiceLineItem) -> None:
+def _reconcile_row(item: InvoiceLineItem) -> list[tuple[str, str, float]]:
     cells = _cells(item)
     known = {name: cell for name, cell in cells.items() if cell.known}
 
@@ -440,20 +526,22 @@ def _reconcile_row(item: InvoiceLineItem) -> None:
         name: _pool(cell, integral=(name == "quantity")) for name, cell in cells.items()
     }
 
+    changed: list[tuple[str, str, float]] = []
     if len(known) == 3:
-        _reconcile_complete_row(item, cells, pools)
+        changed = _reconcile_complete_row(item, cells, pools)
     elif len(known) == 2:
         _derive_missing_cell(item, cells, pools)
 
     item.arithmetic_ok = _row_is_consistent(item)
+    return changed
 
 
-def _reconcile_complete_row(item, cells: dict[str, _Cell], pools) -> None:
+def _reconcile_complete_row(item, cells: dict[str, _Cell], pools) -> list[tuple[str, str, float]]:
     # A row whose own readings already multiply out needs nothing. Searching one
     # anyway would let a differently-scaled combination that also satisfies the
     # equation replace three correct numbers.
     if _row_multiplies_out(item):
-        return
+        return []
 
     combinations = [
         (price, quantity, total)
@@ -464,22 +552,30 @@ def _reconcile_complete_row(item, cells: dict[str, _Cell], pools) -> None:
     ]
 
     if not combinations:
-        _repair_least_trusted_cell(item, cells, pools)
-        return
+        return _repair_least_trusted_cell(item, cells, pools)
 
     if len(combinations) > 1:
         chosen = _best_scaled(combinations, cells)
         if chosen is None:
-            return
+            return []
         combinations = [chosen]
 
     price, quantity, _ = combinations[0]
 
     # The product, not the read total: the match was accepted within tolerance,
     # so the read total may carry a stray digit the multiplication does not.
-    _write_back(item, "unit_price", price)
-    _write_back(item, "quantity", quantity)
-    _write_back(item, "total_price", round(price * quantity, 2))
+    changed = []
+    for name, value in (("unit_price", price), ("quantity", quantity), ("total_price", round(price * quantity, 2))):
+        if _digits_of(value) != cells[name].digits and not _only_trailing_zeros_added(value, cells[name].raw):
+            changed.append((name, cells[name].raw, value))
+        _write_back(item, name, value)
+    return changed
+
+
+def _only_trailing_zeros_added(value: float, raw: str) -> bool:
+    """A reading ending in dots ("212...") whose value only spells out those
+    dots as zeros has not been corrected, only read."""
+    return bool(re.search(r"[.…]\s*$", raw or "")) and _digits_of(value) in dot_run_candidates(raw)
 
 
 def _best_scaled(combinations, cells: dict[str, _Cell]):
@@ -526,29 +622,66 @@ def _best_scaled(combinations, cells: dict[str, _Cell]):
     return winners[0] if best > 0 and len(winners) == 1 else None
 
 
-def _repair_least_trusted_cell(item, cells: dict[str, _Cell], pools) -> None:
-    """No combination works, so re-derive the least trustworthy cell.
+def _repair_least_trusted_cell(item, cells: dict[str, _Cell], pools) -> list[tuple[str, str, float]]:
+    """No combination works, so one cell was misread: find which.
 
-    Long digit runs are where these models fail and short ones are where they
-    succeed, so the cell with the longest sequence is the first suspect, broken
-    by how clean its crop was.
+    Every read cell is tried as the misread one. Its value is derived from the
+    other two (over their candidate values), and kept only if it still
+    *explains* what was read (`_explains_reading`). The explanation closest to
+    the reading wins -- fewest digits changed, then the most other cells taken
+    at their literal reading -- and only if it is the single best; a tie is
+    left for the user. The other two cells are written back at the values the
+    derivation used, which is how "٥٠٧" becomes 5.7 when the line total says so.
+
+    Returns the cells whose digits changed, for the review warning.
     """
     known = {name: cell for name, cell in cells.items() if cell.known}
-    suspect = max(known, key=lambda name: (len(known[name].digits), -_purity(known[name])))
+    if len(known) < 3:
+        return []
 
-    remaining = {name: values for name, values in pools.items() if name != suspect}
-    options = _solve_missing(
-        suspect,
-        remaining.get("unit_price", []),
-        remaining.get("quantity", []),
-        remaining.get("total_price", []),
-    )
+    scored = []
+    for suspect, cell in known.items():
+        others = [name for name in ("unit_price", "quantity", "total_price") if name != suspect]
+        for a in pools[others[0]]:
+            for b in pools[others[1]]:
+                given = {others[0]: a, others[1]: b}
+                options = _solve_missing(
+                    suspect,
+                    [given["unit_price"]] if "unit_price" in given else [],
+                    [given["quantity"]] if "quantity" in given else [],
+                    [given["total_price"]] if "total_price" in given else [],
+                )
+                for value in options:
+                    if suspect == "quantity" and abs(value - round(value)) > 1e-9:
+                        continue
+                    if value <= 0 or not _explains_reading(value, cell.digits):
+                        continue
+                    distance = _levenshtein(_digits_of(value), cell.digits)
+                    literal = sum(
+                        cells[name].digits and abs(v - float(cells[name].digits)) <= TOLERANCE
+                        for name, v in given.items()
+                    )
+                    scored.append(((distance, -literal), suspect, value, given))
 
-    viable = [value for value in options if _explains_reading(value, known[suspect].digits)]
-    chosen = _pick_by_separator(viable, known[suspect].raw) if viable else None
+    if not scored:
+        return []
+    scored.sort(key=lambda entry: entry[0])
+    best_key = scored[0][0]
+    best = {(suspect, value, tuple(sorted(given.items()))) for key, suspect, value, given in scored if key == best_key}
+    if len(best) != 1:
+        return []
 
-    if chosen is not None:
-        _write_back(item, suspect, chosen)
+    suspect, value, given = next(iter(best))
+    changed = []
+    for name, new in (*given, (suspect, value)):
+        if _digits_of(new) != cells[name].digits:
+            changed.append((name, cells[name].raw, new))
+        _write_back(item, name, new)
+    return changed
+
+
+def _digits_of(value: float) -> str:
+    return re.sub(r"\D", "", f"{value:.2f}".rstrip("0").rstrip("."))
 
 
 def _derive_missing_cell(item, cells: dict[str, _Cell], pools) -> None:

@@ -62,6 +62,7 @@ python tools/export_crops.py --photo my_invoice.jpg --out datasets/my_invoice
 qwen_venv/Scripts/python tools/benchmark_recognizers.py --crops datasets/a datasets/b [--mode pipeline]
 python tools/analyze_benchmark.py evaluation/reports/model_benchmark.json   # would combining models help?
 python tools/evaluate.py --config config/default_config.yaml --label x      # whole-invoice accuracy, time, RAM
+python tools/evaluate.py --perfect-readings datasets/a datasets/b           # same, every cell read as its label (no model)
 
 # Tests
 pytest
@@ -124,7 +125,14 @@ every other module knows only its own interface. `PipelineOrchestrator.run()`:
    cannot settle is left exactly as it was read. The invoice total is checked against the
    sum of the line totals the same way. When every row was fully read and multiplies out,
    a total one or two digits off that sum is corrected to it and flagged
-   `MANUAL_REVIEW_REQUIRED`. It runs on the parsed draft rather than
+   `MANUAL_REVIEW_REQUIRED`. Candidate values also cover how handwritten Arabic
+   figures are misread (`handwriting_candidates`):
+   - the decimal comma read as ٠;
+   - the dot-shaped ٠ read as a separator;
+   - a run of dot-zeros counted short.
+
+   A reading without a separator never gets an all-zero decimal part. A correction that
+   changes digits flags that cell `MANUAL_REVIEW_REQUIRED`. It runs on the parsed draft rather than
    inside the parser because it is a property of the three numbers **together**.
 7. Assembles a `PipelineResult` (with a full `config_snapshot` for audit/reproducibility),
    persists it via `ResultStore`, hands it to `output_formatter.format()`.
@@ -392,7 +400,9 @@ anything was read; the "customer" then came back as the column captions. The ste
 are declared as `unruled_fields` in its profile. Its writing sits on each row's dotted rule,
 so its item boxes are moved down a quarter row (`item_vertical_shift: 0.25`), and its
 totals-strip box is narrowed to the figures (`field_insets`). Look at the crops
-(`tools/export_crops.py`) before blaming the model. Re-record `tests/fixtures/form_*_cells.json`
+(`tools/export_crops.py`) before blaming the model. The cropper's blank-cell gate
+counts only strokes (rules removed, pieces ≥ 20% of the cell height, capped at 14 px):
+counting every ink pixel made the dotted rule in each shifted empty row a phantom row. Re-record `tests/fixtures/form_*_cells.json`
 with `tools/record_layout_fixture.py` after changing any geometric step.
 
 **Every pixel threshold assumes a ~2000 px photo.** The geometric and layout

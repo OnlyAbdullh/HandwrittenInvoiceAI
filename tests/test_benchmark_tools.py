@@ -401,3 +401,33 @@ class TestLabelsAndDates:
         assert bench.value_correct("٢٠٢٦/٨/٧", "7/8/2026", "date", "invoice_date") is True
         assert bench.value_correct("7/8/2.26", "7/8/2026", "date", "invoice_date") is True
         assert bench.value_correct("8/7/2026", "7/8/2026", "date", "invoice_date") is False
+
+
+class TestPerfectReadings:
+    """evaluate.py --perfect-readings: every cell read as its export label."""
+
+    def test_each_crop_is_read_as_the_label_of_its_region(self, tmp_path):
+        import numpy as np
+
+        from core.domain.geometry import BoundingBox
+        from core.domain.ocr import RegionCrop, TextRegion
+
+        evaluate = _load("evaluate")
+        (tmp_path / "labels.jsonl").write_text(
+            '{"image": "images/img_r3c1.png", "text": "212000"}\n'
+            '{"image": "images/img_u0.png", "text": "0001901"}\n'
+            '{"image": "images/img_r9c0.png", "text": null}\n',
+            encoding="utf-8",
+        )
+        evaluate.PerfectReadings.labels = evaluate.load_export_labels(tmp_path)
+        evaluate.PerfectReadings.unlabelled = []
+
+        def crop(source_id):
+            region = TextRegion(bbox=BoundingBox(0, 0, 4, 4), source_id=source_id)
+            return RegionCrop(region=region, image=np.zeros((4, 4), np.uint8))
+
+        readings = evaluate.PerfectReadings().read_all(
+            [crop("t:r3c1"), crop("t:u0"), crop("t:r9c0"), crop("t:r1c4")]
+        )
+        assert [r.text for r in readings] == ["212000", "0001901", "", ""]
+        assert evaluate.PerfectReadings.unlabelled == ["r9c0", "r1c4"]

@@ -154,6 +154,22 @@ It runs the real pipeline on every labelled invoice and scores the wire response
 
 **Output:** `evaluation\reports\<timestamp>-<config>-<label>.{md,json}`.
 
+Each wrong quantity, unit price and line total is listed with what the model
+read for it, so a misread digit, a lost separator and a missing row can be told
+apart.
+
+### Perfect readings: is it the model, or everything else?
+
+```powershell
+python tools\evaluate.py --perfect-readings datasets\sahror datasets\onlyone
+```
+
+This runs the same pipeline, but every cell is "read" as its label from the
+export folders, so no model is loaded. Name each folder like the invoice's folder
+under `bills\`. Whatever is still wrong is the layout, the parser or the
+arithmetic. Run it after any layout or parser change. It reported 100% on both
+invoices at the time of writing.
+
 ### CPU vs. GPU
 
 - **llama.cpp backend:** compare with
