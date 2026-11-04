@@ -56,6 +56,19 @@ class FieldScore:
 
 
 @dataclass
+class NumericMiss:
+    """One wrong (or missing) quantity / unit price / line total, with what was
+    read for it -- the difference between a misread digit, a lost separator
+    and a cell the layout never found."""
+
+    row: int
+    column: str
+    expected: float
+    predicted: object
+    read: str | None = None
+
+
+@dataclass
 class InvoiceScore:
     image: str
     form: str | None
@@ -64,6 +77,7 @@ class InvoiceScore:
     numeric_cells_correct: int = 0
     # column -> [correct, total], for quantity / unit_price / total_price
     numeric_by_column: dict[str, list[int]] = field(default_factory=dict)
+    numeric_misses: list[NumericMiss] = field(default_factory=list)
     products_total: int = 0
     product_top1_correct: int = 0
     product_auto_accepted: int = 0
@@ -212,11 +226,15 @@ def score_invoice(
     seconds: float = 0.0,
     model_calls: int | None = None,
     readings: dict[str, str | None] | None = None,
+    item_readings: list[dict[str, str | None]] | None = None,
 ) -> InvoiceScore:
     """Score the wire response. `readings` optionally maps a header field name
-    (invoice_number, date, total) to the raw text it was read as, for the report."""
+    (invoice_number, date, total) to the raw text it was read as, and
+    `item_readings` gives the same per product row (wire order, keyed by
+    quantity / unit_price / total_price), for the report."""
     score = InvoiceScore(image=truth.image, form=truth.form, seconds=seconds, model_calls=model_calls)
     readings = readings or {}
+    item_readings = item_readings or []
 
     if truth.invoice_number is not None:
         predicted = (output.get("invoice_id") or {}).get("value")
@@ -261,8 +279,12 @@ def score_invoice(
                 continue
             tally = score.numeric_by_column.setdefault(column, [0, 0])
             tally[1] += 1
-            if pi is not None:
-                tally[0] += _same_number((predicted_rows[pi].get(column) or {}).get("value"), expected)
+            predicted = None if pi is None else (predicted_rows[pi].get(column) or {}).get("value")
+            if pi is not None and _same_number(predicted, expected):
+                tally[0] += 1
+                continue
+            read = item_readings[pi].get(column) if pi is not None and pi < len(item_readings) else None
+            score.numeric_misses.append(NumericMiss(ti + 1, column, expected, predicted, read))
         if pi is None:
             score.name_cer.append(1.0)
             continue
@@ -405,4 +427,10 @@ def to_markdown(scores: list[InvoiceScore], config_name: str, run_info: dict | N
              f"Complete: {'yes' if s.complete else 'no'}."),
             "",
         ]
+        if s.numeric_misses:
+            lines += ["| Row | Column | Expected | Predicted | Read |", "|---|---|---|---|---|"]
+            for m in s.numeric_misses:
+                read = "(row not found)" if m.predicted is None and m.read is None else repr(m.read)
+                lines.append(f"| {m.row} | {m.column} | {m.expected} | {m.predicted} | {read} |")
+            lines.append("")
     return "\n".join(lines)

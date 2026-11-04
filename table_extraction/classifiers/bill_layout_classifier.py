@@ -183,6 +183,7 @@ class BillLayoutClassifier:
         complete_grid: bool = False,
         item_vertical_shift: float = 0.0,
         unruled_fields: list[dict] | None = None,
+        field_insets: dict[str, dict] | None = None,
         profile_name: str = "default",
         profiles: list[dict] | None = None,
     ):
@@ -248,6 +249,16 @@ class BillLayoutClassifier:
         # same way column_roles is; scale and position follow the table.
         self.unruled_fields = [self._check_unruled(f) for f in (unruled_fields or [])]
 
+        # The part of a classified box that holds the handwriting, per role:
+        # {role: {x: [left, right], y: [top, bottom]}}, fractions of that box.
+        # Form B's totals strip is one box across the whole table holding the
+        # printed caption, a dotted line, "فقط لا غير" and the figures; read
+        # whole, the figures came back as '3148150 ... ٥٠١'. Narrowing the crop
+        # to where the figures are written leaves the model only them to read.
+        self.field_insets = {
+            CellRole(role): self._check_inset(role, inset) for role, inset in (field_insets or {}).items()
+        }
+
         # Other printed forms this classifier recognises, each a full set of
         # the parameters above. The page is labelled by whichever profile -- this
         # one or an alternative -- fits its detected grid best. A second form is
@@ -269,6 +280,21 @@ class BillLayoutClassifier:
         if not (x0 < x1 and y0 < y1):
             raise ValueError(f"bill_layout: unruled field {field!r} needs left < right and top < bottom.")
         return role, (x0, x1), (y0, y1)
+
+    @staticmethod
+    def _check_inset(role: str, inset: dict) -> tuple[tuple[float, float], tuple[float, float]]:
+        try:
+            if set(inset) - {"x", "y"}:
+                raise ValueError("unknown keys")
+            x0, x1 = (float(v) for v in inset.get("x", (0.0, 1.0)))
+            y0, y1 = (float(v) for v in inset.get("y", (0.0, 1.0)))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise ValueError(
+                f"bill_layout: field_insets[{role!r}] must be {{x: [left, right], y: [top, bottom]}}."
+            ) from exc
+        if not (0.0 <= x0 < x1 <= 1.0 and 0.0 <= y0 < y1 <= 1.0):
+            raise ValueError(f"bill_layout: field_insets[{role!r}] fractions must satisfy 0 <= start < end <= 1.")
+        return (x0, x1), (y0, y1)
 
     def _unruled_regions(self, table_bbox: BoundingBox, table_id: str, image_size: tuple[int, int]) -> list[LayoutRegion]:
         width, height = image_size
@@ -352,7 +378,7 @@ class BillLayoutClassifier:
             LayoutRegion(
                 # "s": a cell the grid completion inferred rather than detected.
                 id=f"{c.cell.table_id}:r{c.cell.row}c{c.cell.col}" + ("s" if c.synthesized else ""),
-                bbox=self._item_box(c),
+                bbox=self._region_box(c),
                 role=c.role,
                 zone=self._zone_of(c, top, bottom),
                 content_kind=content_kind_for(c.role),
@@ -377,11 +403,17 @@ class BillLayoutClassifier:
             raw_output=table.raw_extractor_output,
         )
 
-    def _item_box(self, c: _Cell) -> BoundingBox:
+    def _region_box(self, c: _Cell) -> BoundingBox:
         box = c.cell.bbox
-        if not self.item_vertical_shift or c.role not in _ITEM_CELL_ROLES:
-            return box
-        return replace(box, y=box.y + int(round(self.item_vertical_shift * box.h)))
+        if self.item_vertical_shift and c.role in _ITEM_CELL_ROLES:
+            box = replace(box, y=box.y + int(round(self.item_vertical_shift * box.h)))
+        inset = self.field_insets.get(c.role)
+        if inset is not None:
+            (x0, x1), (y0, y1) = inset
+            left, top = box.x + round(x0 * box.w), box.y + round(y0 * box.h)
+            right, bottom = box.x + round(x1 * box.w), box.y + round(y1 * box.h)
+            box = BoundingBox(x=left, y=top, w=max(1, right - left), h=max(1, bottom - top))
+        return box
 
     def _zone_of(self, c: _Cell, top: int, bottom: int) -> Zone:
         if c.y_center < top - self.zone_tolerance:

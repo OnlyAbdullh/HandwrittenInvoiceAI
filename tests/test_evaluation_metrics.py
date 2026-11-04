@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from evaluation.metrics import score_invoice, summarize
+from evaluation.metrics import score_invoice, summarize, to_markdown
 from evaluation.schema import InvoiceTruth, LineItemTruth
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -132,3 +132,25 @@ def test_an_unparsed_reading_is_shown_beside_the_null_it_became():
                           readings={"date": "2.26/8/7?", "total": None})
     report = to_markdown([score], "x.yaml")
     assert "None (read: '2.26/8/7?')" in report
+
+
+def test_each_wrong_number_is_listed_with_what_was_read():
+    _, truth = load()
+    output = _perfect_output(truth)
+    output["products"][1]["unit_price"]["value"] = 20.0
+    readings = [{"quantity": None, "unit_price": None, "total_price": None} for _ in truth.items]
+    readings[1]["unit_price"] = "٢.."
+    score = score_invoice(output, truth, item_readings=readings)
+
+    assert [(m.row, m.column, m.predicted, m.read) for m in score.numeric_misses] == [(2, "unit_price", 20.0, "٢..")]
+    report = to_markdown([score], "x.yaml")
+    assert f"| 2 | unit_price | {truth.items[1].unit_price} | 20.0 | '٢..' |" in report
+
+
+def test_a_number_on_a_missed_row_says_the_row_was_not_found():
+    _, truth = load()
+    output = _perfect_output(truth)
+    del output["products"][0]
+    score = score_invoice(output, truth)
+    assert {m.row for m in score.numeric_misses} == {1}
+    assert "(row not found)" in to_markdown([score], "x.yaml")

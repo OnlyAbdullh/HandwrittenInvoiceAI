@@ -160,6 +160,19 @@ still mis-laid-out, see the experiment log):
 No combination beat Qwen3.5 alone on held-out invoices. Per invoice, Qwen3.5 took
 38 s and 3.5 GB of RAM, against Nuqta's 106 s and 9.9 GB.
 
+**All 41 cells, photos read at the working resolution** (latest):
+
+| Model | CER | Exact | Value acc. | s/cell |
+|---|---|---|---|---|
+| Nuqta Q8_0 | **0.245** | 0.293 | 0.321 | 4.86 |
+| Arabic-Qwen3.5-OCR-v4 | 0.276 | 0.293 | **0.393** | **0.92** |
+| Nuqta Q4_K_M | 0.279 | 0.293 | 0.321 | 2.70 |
+| Qwen2.5-VL-3B v3 | 0.423 | 0.244 | 0.250 | 0.99 |
+
+The top three are within about one cell of each other. Qwen3.5 stays the default:
+it reads the most numbers exactly, is 5× faster than Nuqta Q8, and fits the 4 GB
+GPU. A whole invoice takes 17 s with it.
+
 **What these numbers can and cannot say:**
 
 - **The data is small.** 20 cells means one cell is 5 points of exact-match, so ranks

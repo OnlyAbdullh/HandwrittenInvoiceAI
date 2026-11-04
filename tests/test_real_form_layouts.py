@@ -254,3 +254,60 @@ class TestUnruledFieldConfig:
     def test_a_malformed_field_fails_when_the_config_loads(self, field):
         with pytest.raises(ValueError):
             BillLayoutClassifier(unruled_fields=[field])
+
+
+class TestFormBCropPlacement:
+    """Where form B's writing actually sits, as the configured profile crops it."""
+
+    def _layouts(self, two_form_classifier):
+        table, size = load_fixture("form_b_cells.json")
+        # The same profile without the crop placement settings.
+        plain = BillLayoutClassifier(
+            table_row_count=15, table_col_count=4,
+            column_roles=["unit_price", "quantity", "product_name", "line_total"],
+            header_roles=[], footer_roles=["total_amount", "label"],
+            printed_header_row=True, footer_from_below=False, ragged_row_slack=1, complete_grid=True,
+        ).classify(table, size)
+        configured = two_form_classifier.classify(table, size)
+        assert configured.source.endswith("[form_b_bilingual]")
+        return plain, configured
+
+    def test_item_crops_move_down_onto_the_writing(self, two_form_classifier):
+        plain, configured = self._layouts(two_form_classifier)
+        before = {r.id: r.bbox for r in plain.regions}
+        for region in configured.with_role(CellRole.QUANTITY):
+            assert region.bbox.y - before[region.id].y == round(0.25 * region.bbox.h)
+
+    def test_the_total_is_cropped_to_the_figures_not_the_whole_strip(self, two_form_classifier):
+        plain, configured = self._layouts(two_form_classifier)
+        strip = plain.with_role(CellRole.TOTAL_AMOUNT)[0].bbox
+        figures = configured.with_role(CellRole.TOTAL_AMOUNT)[0].bbox
+        assert figures.x == strip.x + round(0.22 * strip.w)
+        assert figures.x + figures.w == strip.x + round(0.84 * strip.w)
+        assert figures.y + figures.h == strip.y + strip.h
+        # "المجموع" (right) and "فقط لا غير" (left) are outside the crop.
+        assert figures.x + figures.w < strip.x + strip.w - 100
+        assert figures.x > strip.x + 100
+
+    def test_the_date_crop_does_not_reach_the_invoice_number_line(self, two_form_classifier):
+        _, configured = self._layouts(two_form_classifier)
+        number = configured.with_role(CellRole.INVOICE_NUMBER)[0].bbox
+        date = configured.with_role(CellRole.INVOICE_DATE)[0].bbox
+        assert date.y >= number.y + number.h
+
+
+class TestFieldInsetConfig:
+    @pytest.mark.parametrize("inset", [
+        {"x": [0.8, 0.2]},
+        {"x": [-0.1, 0.5]},
+        {"y": [0.0, 1.5]},
+        {"x": [0.1, 0.9], "z": [0, 1]},
+        {"x": "wide"},
+    ])
+    def test_a_malformed_inset_fails_when_the_config_loads(self, inset):
+        with pytest.raises(ValueError):
+            BillLayoutClassifier(field_insets={"total_amount": inset})
+
+    def test_an_unknown_role_fails(self):
+        with pytest.raises(ValueError):
+            BillLayoutClassifier(field_insets={"no_such_role": {"x": [0.1, 0.9]}})

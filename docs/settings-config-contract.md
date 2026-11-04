@@ -112,9 +112,16 @@ Form B's profile (`config/default_config.yaml`) declares its invoice number, cus
 and date this way. It also sets `printed_header_row: true` and
 `footer_from_below: false`, which are right once the page is kept around the table.
 
+`field_insets` (`{role: {x: [left, right], y: [top, bottom]}}`, fractions of the
+classified box, each within 0–1) narrows a box to the part holding the handwriting.
+Form B uses it for its totals strip. `item_vertical_shift` (−0.5 to 0.5, a fraction
+of the cell height) moves item boxes down onto writing that sits on the row's rule;
+form B uses 0.25.
+
 **C# side:** the settings page sends its own `table_extraction` and perspective
 parameters, so the desktop app gets the form-B fixes only when its defaults match
 `config/default_config.yaml`. That means the perspective `margin`, and the form-B
-profile's `printed_header_row`, `footer_from_below` and `unruled_fields`. Update
+profile's `printed_header_row`, `footer_from_below`, `unruled_fields`,
+`item_vertical_shift` and `field_insets`. Update
 `PipelineCatalog.cs` (or wherever the app builds its default configuration)
 accordingly.

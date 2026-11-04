@@ -71,6 +71,23 @@ def raw_readings(run) -> dict[str, str | None]:
     }
 
 
+def item_raw_readings(run) -> list[dict[str, str | None]]:
+    """What was read for each line item's numbers, in wire order."""
+    invoice = getattr(run.result, "invoice", None)
+    if invoice is None:
+        return []
+
+    def text(value) -> str | None:
+        if value.raw is not None:
+            return value.raw
+        return None if value.value is None else str(value.value)
+
+    return [
+        {"quantity": text(item.quantity), "unit_price": text(item.unit_price), "total_price": text(item.total_price)}
+        for item in invoice.line_items
+    ]
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", default="config/qwen_config.yaml")
@@ -131,7 +148,8 @@ def main() -> int:
         seconds = time.perf_counter() - t0
 
         score = score_invoice(
-            run.output, truth, seconds=seconds, model_calls=run.timings.get("crop_count"), readings=raw_readings(run),
+            run.output, truth, seconds=seconds, model_calls=run.timings.get("crop_count"),
+            readings=raw_readings(run), item_readings=item_raw_readings(run),
         )
         scores.append(score)
         print(f" {seconds:.1f}s")

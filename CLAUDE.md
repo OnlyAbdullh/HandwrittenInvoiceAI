@@ -389,7 +389,10 @@ paper on a white cloth) the strongest outline is the table's printed border, and
 exactly to it cut away the invoice number, customer, date and the written total before
 anything was read; the "customer" then came back as the column captions. The step keeps a
 `margin` (default 0.15) of the photo around the outline. Form B's dotted-line header fields
-are declared as `unruled_fields` in its profile; re-record `tests/fixtures/form_*_cells.json`
+are declared as `unruled_fields` in its profile. Its writing sits on each row's dotted rule,
+so its item boxes are moved down a quarter row (`item_vertical_shift: 0.25`), and its
+totals-strip box is narrowed to the figures (`field_insets`). Look at the crops
+(`tools/export_crops.py`) before blaming the model. Re-record `tests/fixtures/form_*_cells.json`
 with `tools/record_layout_fixture.py` after changing any geometric step.
 
 **Every pixel threshold assumes a ~2000 px photo.** The geometric and layout

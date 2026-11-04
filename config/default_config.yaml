@@ -125,9 +125,20 @@ table_extraction:
         # width from the left edge, of its height from the top; negative is
         # above). Measured on bills/onlyone.
         unruled_fields:
-          - {role: invoice_number, x: [0.04, 0.42], y: [-0.11, -0.05]}
-          - {role: merchant_name,  x: [0.38, 0.80], y: [-0.068, -0.002]}
-          - {role: invoice_date,   x: [-0.06, 0.26], y: [-0.068, -0.002]}
+          - {role: invoice_number, x: [0.04, 0.42],   y: [-0.11, -0.058]}
+          - {role: merchant_name,  x: [0.38, 0.80],   y: [-0.068, -0.002]}
+          - {role: invoice_date,   x: [-0.06, 0.235], y: [-0.055, -0.002]}
+        # The writing sits ON each row's dotted rule, so the printed cell
+        # holds the tails of the row above and cuts off the bottom of its own
+        # digits. A quarter of a row down recentres every item crop on its own
+        # writing (inspected at 0, 0.2, 0.3, 0.4: 0.4 starts taking the row
+        # below).
+        item_vertical_shift: 0.25
+        # The totals strip is one box holding "المجموع", a dotted line,
+        # "فقط لا غير" and the figures; read whole, the figures came back as
+        # '3148150 ... ٥٠١'. Only the part where the figures are written.
+        field_insets:
+          total_amount: {x: [0.22, 0.84], y: [0.18, 1.0]}
 
 string_matching:
   algorithm: levenshtein

@@ -237,6 +237,73 @@ Found by reading the evaluation against the photos (cloud, real photos, no model
   reconciliation is re-evaluated.
 - **Not measured yet** with the real models.
 
+### 2026-11-04 · Re-run at the working resolution (41 of 41 cells)
+- **Data:** `sahror` + `onlyone`, 41 labelled cells, all read by 8 models.
+  The resolution fix worked on the laptop: 41 crops, 41 labelled.
+- **Where:** laptop, CUDA.
+- **Result, per cell:**
+
+  | Model | CER | Exact | Value acc. (numbers, dates) | s/cell |
+  |---|---|---|---|---|
+  | Nuqta Q8_0 | **0.245** | 0.293 | 0.321 | 4.86 |
+  | Arabic-Qwen3.5-OCR-v4 | 0.276 | 0.293 | **0.393** | **0.92** |
+  | Nuqta Q4_K_M | 0.279 | 0.293 | 0.321 | 2.70 |
+  | Qwen2.5-VL-3B 4-bit v3 | 0.423 | 0.244 | 0.250 | 0.99 |
+  | Qwen3-VL-2B | 0.561 | 0.293 | 0.250 | 1.66 |
+  | TrOCR ×2, Qari | > 1.3 | ≤ 0.02 | 0 | — |
+
+- **Result, combinations, leave-one-invoice-out:**
+  - **Routing by kind:** 0.315. Worse.
+  - **Fallback, Qwen3.5 → Nuqta Q8:** CER 0.260, but value accuracy fell
+    0.393 → 0.357, and the thresholds were unstable (0.643 / 0.998).
+  - **Oracle:** 0.081.
+- **Result, calibration:** 39% of Qwen3.5's cells were wrong at confidence ≥ 0.75;
+  32–34% for Nuqta.
+- **Result, invoice evaluation,** `default_config.yaml`:
+  - header 4/9, numeric 12/24, product top-1 **8/8**;
+  - rows 8/8 matched, 3 phantom, 0 missed;
+  - **17.2 s per invoice** (38 s before: the photos are now read at 2000 px);
+  - 3.6 GB peak RAM.
+
+  Failures by field:
+  - **Dates:** both years misread (`٢٠٤٦`, `٣٠٢٦`), so null.
+  - **Totals:** `٢١٤٨٢٠٥` on `sahror` (a digit dropped; the rows did not all
+    verify, so it was not corrected); `3148150 … ٥٠١` on `onlyone`, read from the
+    whole totals strip.
+  - **Invoice number:** `0001901 001` on `onlyone`.
+- **Decision:** Qwen3.5-OCR-v4 stays the default.
+  - Nuqta Q8's lead is 0.03 CER on 41 cells, about one cell's worth.
+  - Qwen3.5 reads more numbers exactly (0.393 vs. 0.321), and numbers are what
+    the arithmetic checks need.
+  - Qwen3.5 is 5× faster per cell. Nuqta Q8 also needs more VRAM than the 4 GB
+    card has, so it is partly on the CPU.
+
+  Revisit when more invoices are labelled.
+
+### 2026-11-04 · Form B crops: what the model was actually shown
+Inspected every number crop of both invoices (cloud, real photos, no model).
+Form A's crops are clean: its errors are the handwriting itself (the dot-shaped
+zero, the year). Form B's crops had three problems:
+
+- **Item cells.** The writing sits on each row's dotted rule, so the printed
+  cell held the tails of the row above and cut off the bottom of its own digits.
+  Compared `item_vertical_shift` at 0, 0.2, 0.3 and 0.4: at 0.2–0.3 every crop
+  holds its own digits whole and nothing else; at 0.4 the row below starts to
+  appear. **Set to 0.25** in the form-B profile.
+- **Total.** The crop was the whole totals strip: "المجموع", a dotted line,
+  "فقط لا غير" and the edge of the row above. New `bill_layout` option
+  `field_insets` narrows a classified box to where the writing is, as fractions
+  of that box. Form B: `total_amount: {x: [0.22, 0.84], y: [0.18, 1.0]}`.
+- **Date.** Its box overlapped the bottom of the invoice-number line and clipped
+  the "التاريخ" caption. Tightened: date `y: [-0.055, -0.002]`, `x: [-0.06, 0.235]`;
+  invoice number `y: [-0.11, -0.058]`.
+
+`evaluate.py` now lists every wrong quantity, price and line total with the raw
+reading, so the next run shows whether a number was misread, lost its separator,
+or came from a row the layout missed.
+
+**Not measured yet** with the models.
+
 ### Pending: needs the laptop
 - Re-export both invoices at the working resolution (`export_crops.py` should
   now print `read at ...x2000` and 41 labelled cells), re-run the benchmark on
