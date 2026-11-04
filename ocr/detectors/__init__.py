@@ -12,14 +12,17 @@ from __future__ import annotations
 
 import logging
 
+from ocr.detectors.registry import detector_registry
+
 logger = logging.getLogger(__name__)
 
-_OPTIONAL_DETECTORS = (("surya_detector", "surya-ocr"),)
+_OPTIONAL_DETECTORS = (("surya_detector", "surya_detector", "surya-ocr"),)
 
-for _module_name, _requirement in _OPTIONAL_DETECTORS:
+for _module_name, _registered, _requirement in _OPTIONAL_DETECTORS:
     try:
         __import__(f"ocr.detectors.{_module_name}")
     except Exception as _exc:  # noqa: BLE001 - any import failure disables it
+        detector_registry.mark_unavailable(_registered, f"needs {_requirement} ({_exc})")
         logger.info(
             "Text detector '%s' unavailable (needs %s): %s",
             _module_name,

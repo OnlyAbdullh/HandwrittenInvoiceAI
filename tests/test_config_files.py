@@ -34,6 +34,18 @@ CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 CONFIGS = sorted(CONFIG_DIR.glob("*.yaml"))
 
 
+@pytest.mark.parametrize("name", ["nuqta_config.yaml", "qwen_config.yaml", "qwen_detector_config.yaml", "surya_config.yaml"])
+def test_every_approach_reads_the_same_page_as_the_default(name: str):
+    """tools/compare_pipelines.py compares *reading* approaches. If one config
+    preprocesses the page or labels the layout differently, the comparison
+    measures that instead -- the Surya configs had drifted that way (binarized
+    pages, columns measured on form A only)."""
+    default = load_config(CONFIG_DIR / "default_config.yaml")
+    other = load_config(CONFIG_DIR / name)
+    assert other.preprocessing == default.preprocessing
+    assert other.table_extraction == default.table_extraction
+
+
 @pytest.mark.parametrize("path", CONFIGS, ids=lambda p: p.name)
 def test_config_loads_and_builds(path: Path):
     config = load_config(path)
@@ -49,7 +61,8 @@ def test_config_loads_and_builds(path: Path):
     build_layout_classifier(config.table_extraction)
     build_string_matcher(config.string_matching)
     build_output_formatter(config.output)
-    flow_registry.get(config.flow.name)
+    flow_cls = flow_registry.get(config.flow.name)
+    check_params("flow", config.flow.name, flow_cls.__init__, config.flow.params)
 
     if config.ocr.cropper:
         build_region_cropper(config.ocr, config.flow.name)

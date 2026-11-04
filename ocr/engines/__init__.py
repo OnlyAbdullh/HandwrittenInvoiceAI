@@ -22,18 +22,20 @@ import logging
 
 from ocr.engines import stub_engine  # noqa: F401  (no dependencies at all)
 from ocr.engines import tesseract_engine  # noqa: F401  (pytesseract imported lazily)
+from ocr.registry import engine_registry
 
 logger = logging.getLogger(__name__)
 
 _OPTIONAL_ENGINES = (
-    ("surya_engine", "surya-ocr"),
-    ("qwen_vlm_engine", "transformers / torch"),
+    ("surya_engine", "surya", "surya-ocr"),
+    ("qwen_vlm_engine", "qwen_vlm", "transformers / torch"),
 )
 
-for _module_name, _requirement in _OPTIONAL_ENGINES:
+for _module_name, _registered, _requirement in _OPTIONAL_ENGINES:
     try:
         __import__(f"ocr.engines.{_module_name}")
     except Exception as _exc:  # noqa: BLE001 - any import failure disables the engine
+        engine_registry.mark_unavailable(_registered, f"needs {_requirement} ({_exc})")
         logger.info(
             "OCR engine '%s' unavailable (needs %s): %s",
             _module_name,

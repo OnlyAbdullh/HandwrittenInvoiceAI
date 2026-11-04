@@ -372,3 +372,64 @@ class TestRecognizerContract:
 
         with pytest.raises(RuntimeError, match="read_all"):
             flow.run(page(), page())
+
+
+class TestDetectorAssignedToLayout:
+    """detector_driven with assign_to_layout: Surya's boxes, the grid's meaning."""
+
+    @staticmethod
+    def _layout():
+        from core.domain.geometry import BoundingBox
+        from core.domain.layout import InvoiceLayout, LayoutRegion
+        from core.domain.roles import CellRole, ContentKind
+
+        return InvoiceLayout(regions=[
+            LayoutRegion(id="t:r2c0", bbox=BoundingBox(0, 100, 100, 50), role=CellRole.UNIT_PRICE,
+                         content_kind=ContentKind.NUMBER, row=2, col=0, table_id="t"),
+            LayoutRegion(id="t:r2c1", bbox=BoundingBox(100, 100, 100, 50), role=CellRole.QUANTITY,
+                         content_kind=ContentKind.NUMBER, row=2, col=1, table_id="t"),
+            LayoutRegion(id="t:r1c0", bbox=BoundingBox(0, 50, 200, 50), role=CellRole.COLUMN_HEADER,
+                         content_kind=ContentKind.ARABIC_TEXT, row=1, col=0, table_id="t"),
+        ])
+
+    @staticmethod
+    def _box(x, y, w, h):
+        from core.domain.geometry import BoundingBox
+        from core.domain.ocr import TextRegion
+
+        return TextRegion(bbox=BoundingBox(x, y, w, h), confidence=0.9)
+
+    def test_a_box_across_two_columns_is_split_at_the_rule(self):
+        from core.domain.roles import ContentKind
+        from orchestration.flows.detector_driven import assign_to_layout
+
+        pieces = assign_to_layout([self._box(40, 110, 120, 30)], self._layout(), 0.3)
+        assert sorted((p.source_id, p.bbox.x, p.bbox.w) for p in pieces) == [("t:r2c0", 40, 60), ("t:r2c1", 100, 60)]
+        assert all(p.content_kind is ContentKind.NUMBER for p in pieces)
+
+    def test_a_sliver_in_a_neighbouring_cell_is_not_read_as_it(self):
+        from orchestration.flows.detector_driven import assign_to_layout
+
+        pieces = assign_to_layout([self._box(10, 110, 100, 30)], self._layout(), 0.3)
+        assert [p.source_id for p in pieces] == ["t:r2c0"]
+
+    def test_printed_captions_are_dropped_and_text_outside_the_grid_is_kept(self):
+        from core.domain.roles import ContentKind
+        from orchestration.flows.detector_driven import assign_to_layout
+
+        caption = self._box(20, 60, 150, 30)
+        outside = self._box(300, 300, 80, 30)
+        pieces = assign_to_layout([caption, outside], self._layout(), 0.3)
+        assert pieces == [outside]
+        assert pieces[0].content_kind is ContentKind.ANY and pieces[0].source_id is None
+
+
+def test_an_optional_component_that_failed_to_import_says_what_it_needs():
+    from core.registry import Registry
+
+    registry = Registry(kind="text detector")
+    registry.mark_unavailable("surya_detector", "needs surya-ocr (No module named 'surya')")
+    with pytest.raises(KeyError, match="not available on this machine: needs surya-ocr"):
+        registry.get("surya_detector")
+    with pytest.raises(KeyError, match="Unknown text detector 'other'"):
+        registry.get("other")

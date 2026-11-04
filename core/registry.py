@@ -56,6 +56,14 @@ class Registry(Generic[T]):
     def __init__(self, kind: str):
         self._kind = kind
         self._registry: Dict[str, Type[T]] = {}
+        # Optional implementations whose import failed, and why. Named in the
+        # "unknown" error so the fix ("pip install surya-ocr") is in the message.
+        self._unavailable: Dict[str, str] = {}
+
+    def mark_unavailable(self, name: str, reason: str) -> None:
+        """Record that `name` exists but could not be imported on this machine."""
+        if name not in self._registry:
+            self._unavailable[name] = reason
 
     def register(self, name: str):
         def decorator(cls: Type[T]) -> Type[T]:
@@ -71,7 +79,12 @@ class Registry(Generic[T]):
             return self._registry[name]
         except KeyError:
             available = ", ".join(sorted(self._registry)) or "(none registered)"
-            raise KeyError(f"Unknown {self._kind} '{name}'. Available: {available}")
+            if name in self._unavailable:
+                raise KeyError(
+                    f"{self._kind} '{name}' is not available on this machine: {self._unavailable[name]}. "
+                    f"Available: {available}"
+                ) from None
+            raise KeyError(f"Unknown {self._kind} '{name}'. Available: {available}") from None
 
     def create(self, name: str, **kwargs) -> T:
         cls = self.get(name)

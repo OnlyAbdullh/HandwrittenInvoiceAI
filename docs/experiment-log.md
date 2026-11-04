@@ -412,6 +412,44 @@ model.
   right; `onlyone` 10/12. Expected on the laptop: numbers 22/24, header 8/9
   (the onlyone total remains). Perfect readings still give 100%.
 
+### 2026-11-04 · The invoice total as a fourth equation, measured
+- **Laptop, `default_config.yaml`:** exactly as the replay predicted.
+  - Numbers **22/24** and header **8/9**.
+  - `sahror` is **complete**: every field right. It is the first complete invoice.
+  - 14.4 s per invoice, 2.9 GB peak RAM.
+- **Left (onlyone):**
+  - the total, read as `٥١٤٨١٤٠٠`;
+  - row 2, read as `٢٠١ × 6 = ١٢٠٦`, which multiplies out as misread.
+
+  Both are recognition errors no check here can see.
+
+### 2026-11-04 · Every reading approach made comparable
+The user asked why Surya + Qwen is not used. Before measuring it, the two Surya
+configs had to stop being handicapped:
+
+- **`qwen_detector_config.yaml`** had:
+  - binarized the page before Qwen read it (measured to wreck handwriting);
+  - declared column fractions measured on form A only, so form B could not work;
+  - none of the geometry, margin and crop fixes.
+- **`surya_config.yaml`** was in the same state.
+
+Both now copy the default's preprocessing and layout, and a test pins that.
+
+**Detector flow, `assign_to_layout: true`:** each Surya box is clipped to the
+classified cells it overlaps. Each piece takes that cell's content kind (digit
+prompt and grammar for numbers) and its id. A box across two columns is split at
+the rule, and printed captions are dropped. What Surya then changes is only the
+crop: tight around the ink instead of the whole cell. A cell where it found no ink
+is not read; that is the known weakness, now measurable.
+
+`tools/compare_pipelines.py` runs all four approaches and ranks them. An
+optional component that failed to import now says what it needs ("needs
+surya-ocr"), not just "unknown".
+
+**Not measured:** Surya cannot run in the cloud environment (no access to
+Hugging Face for its models), so both Surya approaches are untested here beyond
+config loading and the box-assignment logic.
+
 ### Pending: needs the laptop
 - Re-export both invoices at the working resolution (`export_crops.py` should
   now print `read at ...x2000` and 41 labelled cells), re-run the benchmark on

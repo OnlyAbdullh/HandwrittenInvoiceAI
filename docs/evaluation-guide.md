@@ -178,7 +178,40 @@ invoices at the time of writing.
   speed, run on a machine without one, or set `$env:CUDA_VISIBLE_DEVICES = ""`
   before starting.
 
-## 5. Protocol for a change meant to improve accuracy
+## 5. Comparing reading approaches
+
+```powershell
+python tools\compare_pipelines.py
+```
+
+This runs `evaluate.py` once for each approach, each in its own process, on the
+same invoices and catalogs. It ranks them by complete invoices, then fields right,
+then phantom and missed rows, then speed.
+
+| Config | How a page is read |
+|---|---|
+| `default_config.yaml` | the printed grid's cells, read by Arabic-Qwen3.5-OCR-v4 |
+| `nuqta_config.yaml` | the printed grid's cells, read by Nuqta (llama.cpp) |
+| `qwen_detector_config.yaml` | Surya finds the ink; each box is clipped to the cell it lies in and read by Qwen |
+| `surya_config.yaml` | Surya detects and reads the whole page by itself |
+
+All four use the same preprocessing and layout, so only the reading differs.
+`tests/test_config_files.py` keeps them identical.
+
+**The two Surya approaches** need `surya-ocr` in the service's venv (not the VLM
+venv): `pip install surya-ocr`.
+
+- It pins `transformers<5`, which is why Qwen runs in its own worker venv.
+- It downloads its models from Hugging Face on first use.
+- On a 4 GB GPU next to Qwen, run Surya on the CPU: `$env:TORCH_DEVICE = "cpu"`.
+
+An approach that cannot run says why in the report, e.g. "not available on this
+machine: needs surya-ocr".
+
+Output: `evaluation\reports\pipeline_comparison.md`. Each approach's full report
+is under `evaluation\reports\compare\<config>\`.
+
+## 6. Protocol for a change meant to improve accuracy
 
 1. Run `evaluate.py` and the benchmark **before** the change, and keep the reports.
 2. Make one change.
