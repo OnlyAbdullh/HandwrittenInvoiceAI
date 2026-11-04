@@ -64,3 +64,61 @@ def test_null_truth_fields_are_not_scored():
 
     assert [f.name for f in score.header] == ["invoice_number"]
     assert summarize([score])["header_correct"] == 1
+
+
+def _perfect_output(truth: InvoiceTruth) -> dict:
+    def matched(name):
+        return {"original_value": name, "results": [{"value": name, "string_matching_score": 1.0}]}
+
+    return {
+        "invoice_id": {"value": truth.invoice_number},
+        "date": {"value": truth.date},
+        "total_invoice_price": {"value": truth.total},
+        "customer_name": matched(truth.customer_name),
+        "city": matched(truth.city),
+        "products": [
+            {"product_name": matched(i.product_name), "quantity": {"value": i.quantity},
+             "unit_price": {"value": i.unit_price}, "total_price": {"value": i.total_price}}
+            for i in truth.items
+        ],
+    }
+
+
+def test_a_perfect_extraction_is_a_complete_invoice_with_nothing_to_review():
+    _, truth = load()
+    score = score_invoice(_perfect_output(truth), truth)
+    assert score.complete and score.complete_without_review
+    summary = summarize([score])
+    assert summary["complete_invoices"] == 1 and summary["complete_without_review"] == 1
+
+
+def test_one_wrong_digit_makes_the_invoice_incomplete_and_shows_in_its_column():
+    _, truth = load()
+    output = _perfect_output(truth)
+    output["products"][1]["unit_price"]["value"] = 999
+    score = score_invoice(output, truth)
+
+    assert not score.complete
+    fields = summarize([score])["by_field"]
+    assert fields["unit_price"] == {"correct": len(truth.items) - 1, "total": len(truth.items)}
+    assert fields["quantity"] == {"correct": len(truth.items), "total": len(truth.items)}
+    assert fields["total"] == {"correct": 1, "total": 1}
+
+
+def test_a_right_but_unsure_match_is_complete_yet_still_needs_review():
+    _, truth = load()
+    output = _perfect_output(truth)
+    output["city"]["results"][0]["string_matching_score"] = 0.6
+    score = score_invoice(output, truth)
+    assert score.complete and not score.complete_without_review
+
+
+def test_the_report_carries_per_field_rows_and_run_measurements():
+    from evaluation.metrics import to_markdown
+
+    output, truth = load()
+    report = to_markdown([score_invoice(output, truth, seconds=3.0)], "x.yaml",
+                         {"load_seconds": 12.5, "peak_ram_mb": 2048.0, "vram_mb": None})
+    assert "### Per field" in report and "| unit_price |" in report
+    assert "| Pipeline load seconds | 12.5 |" in report
+    assert "Peak RAM" in report and "VRAM" not in report  # unknown is omitted, never invented

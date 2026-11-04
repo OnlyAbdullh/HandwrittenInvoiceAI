@@ -76,6 +76,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = PROJECT_ROOT / "OCR_Models"
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from evaluation.resources import (
+    gpu_mb_for_pid,
+    peak_rss_mb,
+)
+
 # A generic instruction, the same for every model, deliberately not the
 # per-kind prompts tuned for one specific model (see module docstring).
 PROMPT = "اقرأ النص المكتوب في هذه الصورة بدقة. اكتب النص فقط، دون أي شرح أو علامات إضافية."
@@ -197,70 +202,6 @@ def value_correct(predicted: str, expected: str | None, kind: str, role: str | N
         return value is not None and value == round(truth)
     value = normalize_price(text)
     return value is not None and abs(value - truth) < 0.005
-
-
-def peak_rss_mb(pid: int | None = None) -> float | None:
-    """Peak resident memory of a process (this one by default), in MB, if measurable."""
-    try:
-        import psutil
-
-        info = psutil.Process(pid).memory_info()
-        peak = getattr(info, "peak_wset", None) or getattr(info, "rss", None)
-        return round(peak / 2**20, 1) if peak else None
-    except Exception:  # noqa: BLE001, S110 - psutil is optional; fall through to the OS
-        pass
-    if sys.platform.startswith("linux"):
-        status = Path(f"/proc/{pid or 'self'}/status")
-        try:
-            for line in status.read_text().splitlines():
-                if line.startswith("VmHWM:"):
-                    return round(int(line.split()[1]) / 1024, 1)
-        except OSError:
-            return None
-    if sys.platform == "win32":
-        try:
-            import ctypes
-            from ctypes import wintypes
-
-            class Counters(ctypes.Structure):
-                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
-                    (name, ctypes.c_size_t) for name in (
-                        "PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage", "QuotaPagedPoolUsage",
-                        "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")
-                ]
-
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            kernel32.OpenProcess.restype = wintypes.HANDLE
-            handle = kernel32.GetCurrentProcess() if pid is None else kernel32.OpenProcess(0x1000 | 0x0010, False, pid)
-            counters = Counters()
-            counters.cb = ctypes.sizeof(Counters)
-            ok = kernel32.K32GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb)
-            if pid is not None:
-                kernel32.CloseHandle(handle)
-            return round(counters.PeakWorkingSetSize / 2**20, 1) if ok else None
-        except Exception:  # noqa: BLE001
-            return None
-    return None
-
-
-def gpu_mb_for_pid(pid: int) -> float | None:
-    """VRAM a process holds now, from nvidia-smi, if there is an NVIDIA GPU."""
-    import shutil
-    import subprocess
-
-    smi = shutil.which("nvidia-smi")
-    if smi is None:
-        return None
-    try:
-        out = subprocess.run([smi, "--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"],
-                             capture_output=True, text=True, timeout=15, check=False).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
-    for line in out.splitlines():
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) == 2 and parts[0] == str(pid):
-            return float(parts[1])
-    return None
 
 
 def passes_validation(text: str, kind: str) -> bool | None:

@@ -34,6 +34,7 @@ from config.loader import load_config  # noqa: E402
 from core.domain.catalog import Catalogs, NamedEntry  # noqa: E402
 from core.domain.image_payload import ImagePayload  # noqa: E402
 from evaluation.metrics import InvoiceScore, score_invoice, summarize, to_markdown  # noqa: E402
+from evaluation.resources import process_tree_memory  # noqa: E402
 from evaluation.schema import EvaluationCatalog, InvoiceTruth  # noqa: E402
 from orchestration.pipeline_orchestrator import PipelineOrchestrator  # noqa: E402
 
@@ -84,7 +85,9 @@ def main() -> int:
 
     started = time.perf_counter()
     orchestrator = PipelineOrchestrator(config)
-    print(f"Pipeline built in {time.perf_counter() - started:.1f}s ({orchestrator.engine_name}).")
+    orchestrator.warmup()  # load the model now, so load time and per-invoice time are not mixed
+    load_seconds = round(time.perf_counter() - started, 1)
+    print(f"Pipeline built in {load_seconds:.1f}s ({orchestrator.engine_name}).")
 
     scores: list[InvoiceScore] = []
     for truth in truths:
@@ -112,8 +115,12 @@ def main() -> int:
         scores.append(score)
         print(f" {seconds:.1f}s")
 
+    # Measured while the model (and any llama-server or worker it started) is
+    # still alive: a child's peak cannot be read once it has exited.
+    run_info = {"load_seconds": load_seconds, "engine": orchestrator.engine_name, **process_tree_memory()}
+
     config_name = Path(args.config).name
-    report = to_markdown(scores, config_name)
+    report = to_markdown(scores, config_name, run_info)
     print()
     print(report)
 
@@ -123,7 +130,15 @@ def main() -> int:
     (out_dir / f"{stem}.md").write_text(report, encoding="utf-8")
     (out_dir / f"{stem}.json").write_text(
         json.dumps(
-            {"config": config_name, "summary": summarize(scores), "invoices": [dataclasses.asdict(s) for s in scores]},
+            {
+                "config": config_name,
+                "run": run_info,
+                "summary": summarize(scores),
+                "invoices": [
+                    {**dataclasses.asdict(s), "complete": s.complete, "complete_without_review": s.complete_without_review}
+                    for s in scores
+                ],
+            },
             ensure_ascii=False,
             indent=2,
             default=str,
