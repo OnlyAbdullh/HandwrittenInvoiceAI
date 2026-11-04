@@ -156,6 +156,18 @@ def _clean_numeric_text(text: str) -> str:
     return cleaned.replace("٫", ".").replace("٬", "")
 
 
+# A separator straight after a separator, before a digit: "214812,.5". Two
+# separators in a row cannot both be separators, and the second one, a dot, is
+# the Arabic-Indic zero "٠" -- which is written as a dot. The paper said
+# ٢١٤٨١٢,٠٥; as read, this became 214812.5 (",." -> one separator) or
+# 2148125 ("..": both dropped as thousands separators).
+_ZERO_AFTER_SEPARATOR = re.compile(r"(?<=\d)([.,])[.·](?=\d)")
+
+
+def _written_zeros(cleaned: str) -> str:
+    return _ZERO_AFTER_SEPARATOR.sub(r"\g<1>0", cleaned)
+
+
 def normalize_quantity(text: str | None) -> int | None:
     """Read a quantity cell as a whole number.
 
@@ -191,7 +203,7 @@ def normalize_price(text: str | None) -> float | None:
     if not text:
         return None
 
-    cleaned = _clean_numeric_text(text)
+    cleaned = _written_zeros(_clean_numeric_text(text))
 
     match = re.search(r"-?\d[\d,.\s]*", cleaned)
     if not match:
@@ -217,7 +229,7 @@ def parse_number_strict(text: str | None) -> float | None:
     if not text:
         return None
 
-    cleaned = _clean_numeric_text(text).strip()
+    cleaned = _written_zeros(_clean_numeric_text(text).strip())
     if not cleaned:
         return None
 
@@ -262,7 +274,9 @@ def _resolve_separators(value: str) -> str:
 # --------------------------------------------------------------------------
 
 # Any separator a writer might use between date components.
-_DATE_SEPARATORS = re.compile(r"[-.\\_\s]+")
+# "٫" (Arabic decimal separator) and "،" (Arabic comma) are in the date cells'
+# decoding alphabet (ocr/decoding_policy.py), so a reading can contain them.
+_DATE_SEPARATORS = re.compile(r"[-.\\_\s٫،]+")
 
 
 def normalize_date_text(text: str | None) -> str:
@@ -283,11 +297,24 @@ def normalize_date_text(text: str | None) -> str:
 
 
 # Ordered most-specific first, so an unambiguous ISO date is never read as D/M/Y.
+#
+# Each pattern stands alone: it may not start or end inside a longer number or a
+# longer run of separated numbers. Without that, "7/8/226" (a year missing a
+# digit) matched "7/8/22" and came out as 2022-08-07, and "7/8/2/26" matched
+# "8/2/26" -- both confident, wrong dates. Normalization turns spaces into "/",
+# which is why a lone "/" before a pattern is allowed but "<digit>/" is not.
+_ALONE_BEFORE = r"(?<!\d)(?<!\d/)"
+_ALONE_AFTER = r"(?!\d)(?!/\d)"
 _DATE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"(\d{4})/(\d{1,2})/(\d{1,2})"), "ymd"),
-    (re.compile(r"(\d{1,2})/(\d{1,2})/(\d{4})"), "dmy"),
-    (re.compile(r"(\d{1,2})/(\d{1,2})/(\d{2})"), "dmy2"),
+    (re.compile(_ALONE_BEFORE + r"(\d{4})/(\d{1,2})/(\d{1,2})" + _ALONE_AFTER), "ymd"),
+    (re.compile(_ALONE_BEFORE + r"(\d{1,2})/(\d{1,2})/(\d{4})" + _ALONE_AFTER), "dmy"),
+    (re.compile(_ALONE_BEFORE + r"(\d{1,2})/(\d{1,2})/(\d{2})" + _ALONE_AFTER), "dmy2"),
 ]
+
+# A dot between two digits. The Arabic-Indic zero "٠" is written as a dot, and a
+# recognizer allowed both digits and "." in a date cell reads "٢٠٢٦" as "2.26"
+# as often as not.
+_DOT_BETWEEN_DIGITS = re.compile(r"(?<=\d)[.٫·](?=\d)")
 
 
 # Invoices are not dated before this or in the far future. A handwritten
@@ -314,8 +341,25 @@ def parse_date(text: str | None, plausible_only: bool = False) -> date | None:
     if not text:
         return None
 
-    cleaned = normalize_date_text(text)
+    found = _parse_date_text(normalize_date_text(text), plausible_only)
+    if found is not None:
+        return found
 
+    # Nothing parsed as written. A dot between two digits may be a zero (see
+    # _DOT_BETWEEN_DIGITS): try each such dot, and every one of them, as "0".
+    # Accepted only when every reading that parses names the same date, so a
+    # repair never chooses between two different answers.
+    raw = fold_digits(unicodedata.normalize("NFKC", text))
+    dots = [m.start() for m in _DOT_BETWEEN_DIGITS.finditer(raw)]
+    if not dots or len(dots) > 4:
+        return None
+    variants = {raw[:i] + "0" + raw[i + 1:] for i in dots}
+    variants.add(_DOT_BETWEEN_DIGITS.sub("0", raw))
+    dates = {d for v in variants if (d := _parse_date_text(normalize_date_text(v), plausible_only)) is not None}
+    return dates.pop() if len(dates) == 1 else None
+
+
+def _parse_date_text(cleaned: str, plausible_only: bool) -> date | None:
     for pattern, order in _DATE_PATTERNS:
         match = pattern.search(cleaned)
         if not match:

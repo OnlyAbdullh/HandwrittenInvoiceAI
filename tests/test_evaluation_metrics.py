@@ -122,3 +122,13 @@ def test_the_report_carries_per_field_rows_and_run_measurements():
     assert "### Per field" in report and "| unit_price |" in report
     assert "| Pipeline load seconds | 12.5 |" in report
     assert "Peak RAM" in report and "VRAM" not in report  # unknown is omitted, never invented
+
+
+def test_an_unparsed_reading_is_shown_beside_the_null_it_became():
+    from evaluation.metrics import to_markdown
+
+    truth = InvoiceTruth(image="x", date="2026-08-07", total=10.0)
+    score = score_invoice({"date": {"value": None}, "total_invoice_price": {"value": None}}, truth,
+                          readings={"date": "2.26/8/7?", "total": None})
+    report = to_markdown([score], "x.yaml")
+    assert "None (read: '2.26/8/7?')" in report

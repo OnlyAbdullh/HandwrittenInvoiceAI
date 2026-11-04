@@ -76,14 +76,31 @@ ITEM_ROLES = {
 
 
 def _number(value: float | None) -> str | None:
+    """A truth amount as the digits written on the paper.
+
+    Never ``:g``: it keeps six significant digits, so 214812.05 became
+    "214812" and every model was scored against a label that dropped the
+    cents.
+    """
     if value is None:
         return None
-    return str(int(value)) if float(value).is_integer() else f"{value:g}"
+    if float(value).is_integer():
+        return str(int(value))
+    return f"{value:.2f}".rstrip("0").rstrip(".")
+
+
+def _written_date(iso: str | None) -> str | None:
+    """A truth date (ISO) as these forms carry it: day/month/year."""
+    if not iso:
+        return None
+    year, month, day = iso.split("-")
+    return f"{int(day)}/{int(month)}/{year}"
 
 
 def header_labels(truth: InvoiceTruth) -> dict[CellRole, str | None]:
     return {
         CellRole.INVOICE_NUMBER: truth.invoice_number,
+        CellRole.INVOICE_DATE: _written_date(truth.date),
         CellRole.CITY: truth.city,
         CellRole.MERCHANT_NAME: truth.customer_name,
         CellRole.TOTAL_AMOUNT: _number(truth.total),

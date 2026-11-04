@@ -122,6 +122,10 @@ python tools\evaluate.py --config config\default_config.yaml --label qwen
 python tools\evaluate.py --config config\nuqta_config.yaml   --label nuqta
 ```
 
+With the transformers backend, `evaluate.py` starts the model worker from
+`INVOICE_AI_VLM_PYTHON` (default `qwen_venv\Scripts\python.exe`). Set it to your VLM
+venv first, e.g. `$env:INVOICE_AI_VLM_PYTHON = "D:\OCR\.venv_vlm\Scripts\python.exe"`.
+
 It runs the real pipeline on every labelled invoice and scores the wire response
 (`evaluation/metrics.py`):
 

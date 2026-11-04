@@ -259,3 +259,44 @@ class TestDatePlausibility:
 
     def test_a_real_date_passes(self):
         assert str(parse_date("7/8/2026", plausible_only=True)) == "2026-08-07"
+
+
+class TestDateRepairs:
+    """Readings of handwritten dates that used to parse wrong, or not at all."""
+
+    def test_a_date_is_never_cut_out_of_a_longer_number(self):
+        # A year missing a digit used to match "7/8/22" and become 2022-08-07.
+        assert parse_date("7/8/226", plausible_only=True) is None
+        assert parse_date("226/8/7", plausible_only=True) is None
+
+    def test_a_stray_separator_does_not_make_a_different_date(self):
+        # "7/8/2/26" used to match "8/2/26": 2026-02-08, confidently wrong.
+        assert parse_date("7/8/2/26") != date(2026, 2, 8)
+
+    def test_the_dot_shaped_zero_is_read_as_zero(self):
+        # The Arabic-Indic zero is a dot: ٢٠٢٦ is read "2.26" as often as not.
+        assert parse_date("٢.٢٦/٨/٧", plausible_only=True) == date(2026, 8, 7)
+        assert parse_date("7/8/2.26", plausible_only=True) == date(2026, 8, 7)
+
+    def test_a_repair_that_could_mean_two_dates_is_refused(self):
+        assert parse_date("2.2.26/8/7", plausible_only=True) is None
+
+    def test_dot_separated_dates_are_unchanged(self):
+        assert parse_date("14.03.2026") == date(2026, 3, 14)
+        assert parse_date("٧٫٨٫٢٠٢٦") == date(2026, 8, 7)
+
+    def test_a_date_beside_other_numbers_is_still_found(self):
+        assert parse_date("7/8/2026 total 5/6") == date(2026, 8, 7)
+
+
+class TestWrittenZeroInAmounts:
+    def test_a_dot_after_a_separator_is_the_zero(self):
+        # On the paper: ٢١٤٨١٢,٠٥ -- the comma, then a dot-shaped zero.
+        assert parse_number_strict("214812,.5") == 214812.05
+        assert normalize_price("214812..5") == 214812.05
+        assert normalize_price("٢١٤٨١٢,.٥") == 214812.05
+
+    def test_ordinary_amounts_are_unchanged(self):
+        assert normalize_price("214812.05") == 214812.05
+        assert normalize_price("517,65") == 517.65
+        assert normalize_price("5,70") == 5.7

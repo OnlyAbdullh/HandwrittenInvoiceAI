@@ -385,3 +385,19 @@ class TestRecognitionMetrics:
         rows = bench.load_crops(tmp_path / "first") + bench.load_crops(tmp_path / "second")
         assert [r["key"] for r in rows] == ["first/images/0.png", "second/images/0.png"]
         assert [r["source"] for r in rows] == ["first", "second"]
+
+
+class TestLabelsAndDates:
+    def test_amount_labels_keep_their_cents(self, export):
+        # ":g" used to write 214812.05 as "214812".
+        assert export._number(214812.05) == "214812.05"
+        assert export._number(5.7) == "5.7"
+        assert export._number(212000.0) == "212000"
+
+    def test_date_labels_are_written_day_first(self, export):
+        assert export._written_date("2026-08-07") == "7/8/2026"
+
+    def test_a_date_cell_is_right_when_it_names_the_same_day(self, bench):
+        assert bench.value_correct("٢٠٢٦/٨/٧", "7/8/2026", "date", "invoice_date") is True
+        assert bench.value_correct("7/8/2.26", "7/8/2026", "date", "invoice_date") is True
+        assert bench.value_correct("8/7/2026", "7/8/2026", "date", "invoice_date") is False

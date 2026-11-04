@@ -49,6 +49,10 @@ class FieldScore:
     predicted: object
     correct: bool
     auto_accepted: bool | None = None
+    # What the recognizer read, when the wire value is not it -- a date or an
+    # amount that did not parse goes on the wire as null, and without the
+    # reading nobody can tell a misread from a missing cell.
+    read: str | None = None
 
 
 @dataclass
@@ -202,21 +206,33 @@ def _align(predicted: list[dict], truth: list[LineItemTruth]) -> list[tuple[int,
 # --------------------------------------------------------------------------
 
 
-def score_invoice(output: dict, truth: InvoiceTruth, seconds: float = 0.0, model_calls: int | None = None) -> InvoiceScore:
+def score_invoice(
+    output: dict,
+    truth: InvoiceTruth,
+    seconds: float = 0.0,
+    model_calls: int | None = None,
+    readings: dict[str, str | None] | None = None,
+) -> InvoiceScore:
+    """Score the wire response. `readings` optionally maps a header field name
+    (invoice_number, date, total) to the raw text it was read as, for the report."""
     score = InvoiceScore(image=truth.image, form=truth.form, seconds=seconds, model_calls=model_calls)
+    readings = readings or {}
 
     if truth.invoice_number is not None:
         predicted = (output.get("invoice_id") or {}).get("value")
         score.header.append(FieldScore(
             "invoice_number", truth.invoice_number, predicted,
             fold_digits(str(predicted or "")).strip() == fold_digits(truth.invoice_number).strip(),
+            read=readings.get("invoice_number"),
         ))
     if truth.date is not None:
         predicted = (output.get("date") or {}).get("value")
-        score.header.append(FieldScore("date", truth.date, predicted, predicted == truth.date))
+        score.header.append(FieldScore("date", truth.date, predicted, predicted == truth.date, read=readings.get("date")))
     if truth.total is not None:
         predicted = (output.get("total_invoice_price") or {}).get("value")
-        score.header.append(FieldScore("total", truth.total, predicted, _same_number(predicted, truth.total)))
+        score.header.append(FieldScore(
+            "total", truth.total, predicted, _same_number(predicted, truth.total), read=readings.get("total"),
+        ))
     if truth.customer_name is not None:
         customer = output.get("customer_name") or {}
         score.header.append(_matched_field_score("customer_name", customer, truth.customer_name))
@@ -353,7 +369,14 @@ def to_markdown(scores: list[InvoiceScore], config_name: str, run_info: dict | N
     for key, label in (("load_seconds", "Pipeline load seconds"), ("peak_ram_mb", "Peak RAM, MB (incl. model server)"),
                        ("vram_mb", "VRAM held, MB"), ("device", "Device")):
         if run_info and run_info.get(key) is not None:
-            lines.append(f"| {label} | {run_info[key]} |")
+            value = run_info[key]
+            if key == "peak_ram_mb" and run_info.get("peak_ram_this_process_mb") is not None:
+                # The split matters: a model server's working set can include
+                # the memory-mapped model file, which the OS can page out.
+                children = run_info.get("peak_ram_children_mb") or {}
+                value = (f"{value} (this process {run_info['peak_ram_this_process_mb']}"
+                         + "".join(f", child {pid}: {mb}" for pid, mb in children.items()) + ")")
+            lines.append(f"| {label} | {value} |")
     lines += ["", "### Per field", "", "| Field | Correct |", "|---|---|"]
     for name, tally in summary["by_field"].items():
         lines.append(f"| {name} | {_pct(tally['correct'], tally['total'])} |")
@@ -370,7 +393,10 @@ def to_markdown(scores: list[InvoiceScore], config_name: str, run_info: dict | N
             mark = "✅" if f.correct else "❌"
             if f.correct and f.auto_accepted is False:
                 mark = "⚠️ below threshold"
-            lines.append(f"| {f.name} | {f.expected} | {f.predicted} | {mark} |")
+            shown = f.predicted
+            if f.read is not None and str(f.read) != str(f.predicted):
+                shown = f"{f.predicted} (read: {f.read!r})"
+            lines.append(f"| {f.name} | {f.expected} | {shown} | {mark} |")
         lines += [
             "",
             (f"Rows: {s.rows_matched}/{s.rows_expected} matched, {s.phantom_rows} phantom, "

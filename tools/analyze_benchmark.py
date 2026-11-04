@@ -194,7 +194,7 @@ def analyze(models: dict[str, dict[str, dict]]) -> str:
          "**Only one invoice**: combinations are chosen and scored on the same cells (in-sample) -- an "
          "optimistic upper estimate, not evidence. Label a second invoice to get a held-out result."),
         "",
-        "| Strategy | Cells | CER | Exact | Number value accuracy |",
+        "| Strategy | Cells | CER | Exact | Value accuracy (numbers, dates) |",
         "|---|---|---|---|---|",
     ]
 

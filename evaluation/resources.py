@@ -100,6 +100,8 @@ def child_pids() -> list[int]:
         return [c.pid for c in psutil.Process().children(recursive=True)]
     except Exception:  # noqa: BLE001, S110 - psutil is optional; fall through to /proc
         pass
+    if sys.platform == "win32":
+        return _windows_descendants(os.getpid())
     if not sys.platform.startswith("linux"):
         return []
     found: list[int] = []
@@ -114,6 +116,50 @@ def child_pids() -> list[int]:
             found += [int(k) for k in kids]
             queue += kids
     return found
+
+
+def _windows_descendants(root: int) -> list[int]:
+    """Descendants of `root` from a Toolhelp process snapshot (no psutil needed)."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class ProcessEntry(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD), ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+        kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
+        if not snapshot or snapshot == wintypes.HANDLE(-1).value:
+            return []
+        parents: dict[int, list[int]] = {}
+        try:
+            entry = ProcessEntry()
+            entry.dwSize = ctypes.sizeof(ProcessEntry)
+            ok = kernel32.Process32FirstW(snapshot, ctypes.byref(entry))
+            while ok:
+                parents.setdefault(entry.th32ParentProcessID, []).append(entry.th32ProcessID)
+                ok = kernel32.Process32NextW(snapshot, ctypes.byref(entry))
+        finally:
+            kernel32.CloseHandle(snapshot)
+        found, queue = [], [root]
+        while queue:
+            for child in parents.get(queue.pop(), []):
+                if child not in found and child != root:
+                    found.append(child)
+                    queue.append(child)
+        return found
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def process_tree_memory() -> dict:

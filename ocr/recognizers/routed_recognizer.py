@@ -164,7 +164,7 @@ class RoutedRecognizer:
         for i, crop in enumerate(crops):
             groups.setdefault(self._alias_for(crop), []).append(i)
         for alias, indices in groups.items():
-            for i, reading in zip(indices, self._read_with(alias, [crops[i] for i in indices])):
+            for i, reading in zip(indices, self._read_with(alias, [crops[i] for i in indices]), strict=True):
                 readings[i] = reading
 
         if self._fallback_alias is not None:
@@ -172,7 +172,7 @@ class RoutedRecognizer:
             retry = [i for i, r in enumerate(readings)
                      if self._alias_for(crops[i]) != self._fallback_alias and self._unsure(r)]
             if retry:
-                for i, reading in zip(retry, self._read_with(self._fallback_alias, [crops[i] for i in retry])):
+                for i, reading in zip(retry, self._read_with(self._fallback_alias, [crops[i] for i in retry]), strict=True):
                     readings[i] = reading
         return readings  # type: ignore[return-value]
 

@@ -134,6 +134,18 @@ The data:
 
 "—" means the load time was not recorded in the output that was shared.
 
+**Both invoices** (`sahror` + `onlyone`, 34 cells, leave-one-invoice-out; laptop):
+
+| Model | CER | Exact |
+|---|---|---|
+| Arabic-Qwen3.5-OCR-v4 | **0.500** | 0.265 |
+| Nuqta Q4_K_M | 0.508 | 0.176 |
+| Qwen2.5-VL-3B v3 | 0.562 | 0.147 |
+
+The best fallback combination gained 2 cells (unstable threshold). Routing by kind
+lost. The oracle bound is 0.357. Details are in [experiment-log.md](experiment-log.md).
+That run predates the form-B layout fix and the label fixes, so it will be re-run.
+
 **What these numbers can and cannot say:**
 
 - **The data is small.** 20 cells means one cell is 5 points of exact-match, so ranks
@@ -231,9 +243,11 @@ photo ─► geometric correction (once) ─┬─► OCR photometric branch ─
     a fix.
 - **Unknown forms.** Only forms A and B are known. Any other form returns
   `UNKNOWN_FORM` / `NO_LAYOUT_DETECTED` rather than a guessed layout.
-- **Confidence is uncalibrated.** It is the model's own token probability, not a
-  calibrated probability of being right. `analyze_benchmark.py` reports how it
-  actually behaved per band. Don't tune the 0.75 threshold on two invoices.
+- **Confidence is uncalibrated, and measured to be a poor accept signal.** On the
+  34-cell run, 44–53% of all cells were *wrong* with confidence ≥ 0.75, for every
+  model. Treat OCR confidence only as an ordering for review, never as permission
+  to skip it. For numbers, the arithmetic check (`price × qty = total`,
+  `Σ = total`) is the better evidence.
 
 ## 8. Next steps, in order of expected value
 

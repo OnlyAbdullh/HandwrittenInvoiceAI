@@ -87,8 +87,85 @@ Cloud results that used stand-in models verify *plumbing only*, never accuracy.
     orphaned server afterwards.
 - **Accuracy:** none. The stand-ins read garbage by design.
 
+### 2026-11-04 · Benchmark across both invoices, combination analysis, first invoice evaluation
+- **Data:** `sahror` + `onlyone`, 34 cells read by all 8 runnable models.
+- **Where:** laptop.
+- **Result, per cell:**
+
+  | Model | CER | Exact | s/cell |
+  |---|---|---|---|
+  | Arabic-Qwen3.5-OCR-v4 | **0.500** | 0.265 | 1.96 |
+  | Nuqta Q4_K_M | 0.508 | 0.176 | 3.87 |
+  | Nuqta Q8_0 | 0.519 | 0.206 | 6.57 |
+  | Qwen2.5-VL-3B 4-bit v3 | 0.562 | 0.147 | 1.75 |
+  | Qwen3-VL-2B | 0.666 | 0.206 | 2.79 |
+  | Qari / TrOCR models | > 1.3 | — | — |
+
+  The ranking held. Absolute error is far higher than on `sahror` alone (0.143):
+  form B's cells are harder. One label was wrong in this run (the `sahror` total,
+  see below).
+- **Result, combinations, leave-one-invoice-out:**
+  - **Routing by kind:** CER 0.585. Worse than the best single model.
+  - **Fallback, Qwen3.5 → Qwen2.5-VL-3B below a confidence threshold:** CER 0.468,
+    exact 11/34 vs. 9/34. That is two cells, and the learned threshold was
+    0.942 on one fold and 0.655 on the other: unstable. The two models together
+    also exceed 4 GB of VRAM.
+  - **Oracle:** 0.357. Even perfect per-cell choice among these models leaves
+    most of the error.
+- **Result, calibration:** for every model, **44–53% of all cells were wrong
+  readings with confidence ≥ 0.75**. For Qwen3.5, only 8 of its 19 cells
+  (42%) at ≥ 0.9 were exact. A model's own confidence is not a safe
+  auto-accept signal on these invoices.
+- **Result, invoice evaluation:** `nuqta_config.yaml`, before the fixes below:
+
+  | Measure | Result |
+  |---|---|
+  | Header fields | 4/9 |
+  | Numeric cells | 9/24 |
+  | Product top-1 | 7/8 |
+  | Seconds per invoice | 60 |
+  | Peak RAM, process + `llama-server` | 10.2 GB, unsplit; may include the memory-mapped model |
+
+  `default_config.yaml` did not start: `INVOICE_AI_VLM_PYTHON` was not set.
+- **Decision:** no combination enabled; Qwen3.5-OCR-v4 stays the default. Do
+  not treat a model's confidence ≥ 0.75 as "no review needed" for numbers.
+
+### 2026-11-04 · Why form B's header and total failed, and the date and total parsing
+Found by reading the evaluation against the photos (cloud, real photos, no model).
+
+- **Perspective correction cropped form B to its table.** White paper on a
+  white cloth leaves no paper edge, so the strongest outline was the table's
+  border. Everything outside it was cut away before reading: the invoice
+  number, customer, date and the written total. The customer came back as the
+  printed column captions. **Fix:** `margin` (default 0.15) keeps a band of the
+  photo around the outline. Form A's layout is unchanged apart from the offset
+  (checked on the real photo).
+- **The form-B profile was tuned on the cropped page.** It now sets
+  `printed_header_row: true` and takes the totals from the row after the items.
+  Its unruled header (number, customer, date on dotted lines) is declared as
+  `unruled_fields` relative to the table. A box closed between the "Total"
+  caption and item 1 was taken as a second line total; cells taller than 1.5
+  rows are now not item cells. The fixture was re-recorded with
+  `tools/record_layout_fixture.py`.
+- **Date parsing.** `7/8/226` was parsed as 2022-08-07 and `7/8/2.26` as
+  2026-02-08: confident, wrong dates. Patterns may no longer start or end inside
+  a longer number. A dot between digits is tried as the dot-shaped zero "٠", and
+  only accepted when every reading agrees.
+- **Amounts.** `214812,.5` (the paper: ٢١٤٨١٢,٠٥) parsed as 214812.5, and
+  `214812..5` as 2,148,125. A dot straight after a separator is now the zero.
+- **Benchmark labels:**
+  - Amounts were written with `:g`, which keeps six significant digits, so
+    214812.05 was labelled "214812".
+  - Date cells were never exported or scored.
+
+  Both are fixed. The labelled set is now 41 cells: 21 from `sahror`, 20 from
+  `onlyone`, including form B's number, customer, date and total.
+- **What these fixes do to accuracy is not measured yet.** Re-run on the laptop
+  (below).
+
 ### Pending: needs the laptop
-- Re-run the benchmark on both invoices, then the combination analysis:
+- Re-export both invoices (the layout and the labels changed), re-run the
+  benchmark on both invoices, then the combination analysis:
 
   ```powershell
   & D:\OCR\.venv_vlm\Scripts\python.exe tools\benchmark_recognizers.py --crops datasets\sahror datasets\onlyone --mode pipeline

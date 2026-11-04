@@ -176,22 +176,27 @@ def wer(predicted: str, expected: str | None) -> float | None:
 
 
 def value_correct(predicted: str, expected: str | None, kind: str, role: str | None) -> bool | None:
-    """Whether a number cell's reading has the right *value*, read as the pipeline reads it.
+    """Whether a number or date cell's reading has the right *value*, read as the pipeline reads it.
 
     Strict where it matters: one wrong digit, or the decimal point in the wrong
     place, is wrong. Indifferent to what does not change the value: Arabic-Indic
     or Western digits, "5.70" for "5.7", a printed caption before the number.
-    None for cells that are not numbers, or have no label.
+    None for cells that are neither numbers nor dates, or have no label.
 
     This is the reading before arithmetic reconciliation, which can still repair
     a misplaced separator inside the pipeline -- tools/evaluate.py measures that.
     """
-    if expected is None or kind != "number":
+    if expected is None or kind not in ("number", "date"):
         return None
     try:
-        from string_matching.normalization import normalize_price, normalize_quantity
+        from string_matching.normalization import normalize_price, normalize_quantity, parse_date
     except Exception:  # noqa: BLE001
         return None
+    if kind == "date":
+        # Right when it names the same day, however it is written: 7/8/2026,
+        # 2026/8/7 and ٧/٨/٢٠٢٦ are one date.
+        truth_date = parse_date(expected)
+        return truth_date is not None and parse_date(predicted or "", plausible_only=True) == truth_date
     text = strip_caption(predicted or "")
     try:
         truth = float(expected)
@@ -734,7 +739,7 @@ def run_model(candidate: Candidate, crops: list[dict], max_crops: int | None, mo
                 "expected": row.get("text"), "predicted": text,
                 "cer": None if errored else cer(text, row.get("text")),
                 "wer": None if errored else wer(text, row.get("text")),
-                "value_ok": (False if errored and row.get("text") is not None and row.get("kind") == "number"
+                "value_ok": (False if errored and row.get("text") is not None and row.get("kind") in ("number", "date")
                              else value_correct(text, row.get("text"), row.get("kind") or "any", row.get("role"))),
                 # Every exported crop holds ink (the blank-cell gate dropped the
                 # rest), so an empty reading is a miss -- not a pass, even though
@@ -791,7 +796,7 @@ def to_markdown(results: list[ModelResult], mode: str, crops_dir: str) -> str:
          "not empty, and accepted by the pipeline's output validation. A sanity check, not accuracy. Judge the readings in the HTML "
          "report, or fill in `text` in labels.jsonl and run again for real scores."),
         "",
-        "| Rank | Model | Family | Device | Mean CER | Mean WER | Exact match | Number value accuracy | Usable reading | Empty | Mean confidence | Mean s/crop | Load s | Peak RAM MB | Peak VRAM MB |",
+        "| Rank | Model | Family | Device | Mean CER | Mean WER | Exact match | Value accuracy (numbers, dates) | Usable reading | Empty | Mean confidence | Mean s/crop | Load s | Peak RAM MB | Peak VRAM MB |",
         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for i, r in enumerate(ranked, 1):
@@ -803,7 +808,7 @@ def to_markdown(results: list[ModelResult], mode: str, crops_dir: str) -> str:
     if labelled:
         for key, title in (("kind", "By cell kind"), ("source", "By invoice")):
             groups = sorted({g for r in ranked for g in r.breakdown(key)})
-            lines += ["", f"## {title} (CER / exact / number value accuracy; n = cells)", "",
+            lines += ["", f"## {title} (CER / exact / value accuracy; n = cells)", "",
                       "| Model | " + " | ".join(groups) + " |", "|---|" + "---|" * len(groups)]
             for r in ranked:
                 b = r.breakdown(key)
