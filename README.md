@@ -145,6 +145,7 @@ sent to the model. Other engines still exist for other flows.
 |---|---|---|
 | `qwen` recognizer (default) | the VLM worker's virtualenv (`requirements-vlm.txt`) and a model directory | Set `INVOICE_AI_VLM_PYTHON` and `INVOICE_AI_MODEL_DIR` (see `docs/settings-config-contract.md` §4). |
 | `llamacpp` recognizer | `llama-server` (llama.cpp b7990+) and a GGUF model + its `mmproj` | **Nuqta Arabic OCR 4B**: `config/nuqta_config.yaml`. No second virtualenv, no torch; runs on CPU, GPU, or both. Setup: [docs/llamacpp-nuqta-setup.md](docs/llamacpp-nuqta-setup.md). |
+| `routed` recognizer | the recognizers it combines | A model per cell kind, and/or a second model for low-confidence cells. Off by default: enable it only if `tools/analyze_benchmark.py` shows it beats the best single model on held-out invoices. See [docs/evaluation-guide.md](docs/evaluation-guide.md) §3. |
 | `stub` | nothing | Deterministic fake output, for testing the plumbing. Never for real invoices. |
 | `tesseract` | the Tesseract **binary** plus `ara`/`eng` traineddata | Weak on handwriting. |
 | `surya` engine / detector | `requirements-surya.txt` | The detector drives the `detector_driven` flow. |
@@ -171,6 +172,11 @@ the install and the two model files without downloading anything. Everything els
 preprocessing, layout, prompts, validation, the response shape — is the same pipeline.
 
 ### Measuring accuracy
+
+Which model, and why: [docs/recognition-research.md](docs/recognition-research.md) — the
+research, the measured comparison on real invoices, and the decision. How to measure:
+[docs/evaluation-guide.md](docs/evaluation-guide.md). What was tried:
+[docs/experiment-log.md](docs/experiment-log.md).
 
 ```bash
 python tools/evaluate.py --config config/qwen_config.yaml --label my-change
@@ -217,6 +223,11 @@ reading passes the pipeline's own output validation.
   `evaluation/ground_truth` format.
 - **Useful options.** `--only nuqta qari` runs a subset, and `--max-crops 10` gives a
   quick pass. `--gpu-layers` and `--llama-server` apply to GGUF models.
+- **Several invoices at once.** `--crops datasets\sahror datasets\onlyone` scores them
+  together, broken down per invoice and per cell kind, with WER, number-value accuracy and
+  peak RAM/VRAM. Then `python tools\analyze_benchmark.py evaluation\reports\model_benchmark.json`
+  says whether routing by kind or a confidence fallback would beat the best single model,
+  judged on held-out invoices.
 
 ### Configuration
 

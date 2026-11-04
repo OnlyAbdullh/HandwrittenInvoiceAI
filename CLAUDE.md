@@ -59,7 +59,9 @@ INVOICE_AI_CONFIG_PATH=config/nuqta_config.yaml python -m api.main
 
 # Compare every model in OCR_Models/ on one photo (step 2 runs in the VLM venv)
 python tools/export_crops.py --photo my_invoice.jpg --out datasets/my_invoice
-qwen_venv/Scripts/python tools/benchmark_recognizers.py --crops datasets/my_invoice [--mode pipeline]
+qwen_venv/Scripts/python tools/benchmark_recognizers.py --crops datasets/a datasets/b [--mode pipeline]
+python tools/analyze_benchmark.py evaluation/reports/model_benchmark.json   # would combining models help?
+python tools/evaluate.py --config config/default_config.yaml --label x      # whole-invoice accuracy, time, RAM
 
 # Tests
 pytest
@@ -214,6 +216,21 @@ side enforces character sets with a byte-level `LogitsProcessor`, the llama.cpp 
 GBNF grammar. `ocr/llamacpp/` is the llama.cpp half: `gguf.py` (header checks — wrong,
 swapped, truncated files fail before anything loads), `server.py` (process lifecycle),
 `client.py` (request/response, confidence).
+
+### Combining recognizers: `routed`
+
+`ocr/recognizers/routed_recognizer.py` is a Composite `TextRecognizer`: it builds named
+member recognizers (any registered ones), sends each crop to the member configured for
+its `ContentKind`, and optionally re-reads a crop with a fallback member when the first
+reading's confidence is below a threshold or unknown. Confidences from different models
+are never compared with each other. **No shipped config uses it**: the measured best
+single model (Arabic-Qwen3.5-OCR-v4, `docs/recognition-research.md`) stays the default
+until `tools/analyze_benchmark.py` shows a combination beating it on held-out invoices.
+Each member loads its own model, so mind memory.
+
+Model choice is evidence-driven: `docs/recognition-research.md` (research + measured
+comparison + decision), `docs/evaluation-guide.md` (how to measure),
+`docs/experiment-log.md` (what was tried). Record new experiments there.
 
 ### Configuration: two shapes, one bridge
 
