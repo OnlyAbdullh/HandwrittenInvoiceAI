@@ -359,8 +359,10 @@ def reconcile(draft: InvoiceDraft) -> InvoiceDraft:
     # nothing, so only these rows can vouch for the invoice total.
     fully_read = [all(_has_reading(f) for f in (i.quantity, i.unit_price, i.total_price)) for i in draft.line_items]
     draft.warnings = [w for w in draft.warnings if not _is_row_correction(w)]
+    corrected = False
     for item in draft.line_items:
         for name, raw, value in _reconcile_row(item):
+            corrected = True
             # The digits changed, not only the separator: the row now adds up,
             # so nothing else would ask anyone to look at it.
             draft.warnings.append(InvoiceWarning(
@@ -370,7 +372,8 @@ def reconcile(draft: InvoiceDraft) -> InvoiceDraft:
                          "so that quantity x unit price = line total. Confirm it against the paper."),
             ))
 
-    _reconcile_total(draft, rows_verified=all(fully_read))
+    # A row whose digits were just corrected adds up by construction too.
+    _reconcile_total(draft, rows_verified=all(fully_read) and not corrected)
     _refresh_arithmetic_warnings(draft)
     _refresh_total_warning(draft)
     return draft

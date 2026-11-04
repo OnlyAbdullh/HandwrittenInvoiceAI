@@ -323,3 +323,14 @@ class TestHandwrittenMisreads:
         assert 5.7 in handwriting_candidates("٥٠٧")
         assert 1094.4 in handwriting_candidates("1.٩٤٤")
         assert 212000.0 in handwriting_candidates("٢١٢٠٠")
+
+
+def test_a_digit_corrected_row_does_not_vouch_for_the_invoice_total():
+    from string_matching.normalization import normalize_price
+
+    rows = TestHandwrittenMisreads._row
+    draft = InvoiceDraft(line_items=[rows(("16", "13250", "212000")), rows(("87", "٥٠٩٥", "517.65"))])
+    draft.header.total_amount = ExtractedValue(value=normalize_price("٢١٢٥١٧٠٥"), raw="٢١٢٥١٧٠٥")  # 212517.65, one digit off
+    reconcile(draft)
+    assert draft.line_items[1].unit_price.value == 5.95          # the row was repaired ...
+    assert draft.header.total_amount.value != 212517.65          # ... but cannot confirm the total
