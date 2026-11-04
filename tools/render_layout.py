@@ -52,7 +52,7 @@ def analyze(image_path: Path, config):
     if raw is None:
         raise FileNotFoundError(f"Could not read image: {image_path}")
 
-    geometric = PreprocessingPipelineBuilder.build(config.preprocessing.geometric_steps)
+    geometric = PreprocessingPipelineBuilder.build(config.preprocessing.pipeline_geometric_steps())
     table_branch = PreprocessingPipelineBuilder.build(
         config.preprocessing.table_photometric_steps
     )

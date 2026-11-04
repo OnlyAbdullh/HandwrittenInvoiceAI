@@ -115,6 +115,7 @@ class PreparedPage:
     layout: InvoiceLayout
     ocr_image: ImagePayload
     cropper: PaddedRegionCropper
+    scaled: dict | None = None
 
     def is_blank(self, region: LayoutRegion) -> bool:
         return self.cropper.min_ink_ratio > 0 and self.cropper._is_blank(self.ocr_image.image, region.bbox)
@@ -131,7 +132,7 @@ class PreparedPage:
 
 
 def prepare_page(image, config) -> PreparedPage:
-    display = PreprocessingPipelineBuilder.build(config.preprocessing.geometric_steps).run(
+    display = PreprocessingPipelineBuilder.build(config.preprocessing.pipeline_geometric_steps()).run(
         ImagePayload(image=image)
     )
     ocr_image = PreprocessingPipelineBuilder.build(config.preprocessing.ocr_photometric_steps).run(display)
@@ -143,7 +144,8 @@ def prepare_page(image, config) -> PreparedPage:
     )
 
     cropper_params = config.ocr.cropper.params if config.ocr.cropper else {}
-    return PreparedPage(layout=layout, ocr_image=ocr_image, cropper=PaddedRegionCropper(**cropper_params))
+    return PreparedPage(layout=layout, ocr_image=ocr_image, cropper=PaddedRegionCropper(**cropper_params),
+                        scaled=display.metadata.get("working_resolution"))
 
 
 def _row(name: str, text: str | None, region: LayoutRegion, role: str, source: str) -> dict:
@@ -251,6 +253,9 @@ def export_photo(photo: Path, config, out_dir: Path, truth: InvoiceTruth | None 
         print(f"  cannot read {photo}")
         return []
     page = prepare_page(image, config)
+    if page.scaled and page.scaled.get("scale") != 1.0:
+        (w0, h0), (w1, h1) = page.scaled["from"], page.scaled["to"]
+        print(f"  photo {w0}x{h0}, read at {w1}x{h1} (the pipeline's working resolution)")
     print(f"  layout: {page.layout.source}, {len(page.layout.regions)} box(es), "
           f"{sum(r.role is not CellRole.UNKNOWN for r in page.layout.regions)} classified")
     if truth is not None:

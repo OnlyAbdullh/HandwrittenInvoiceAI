@@ -107,6 +107,10 @@ def enforce_server_owned(config: AppConfig, server: AppConfig) -> list[str]:
         overridden.append("string_matching.dictionary_path")
     config.string_matching.dictionary_path = server.string_matching.dictionary_path
 
+    # Every pixel threshold the request may tune assumes this resolution; it is
+    # not on the settings page, and the server's own value is the one tuned.
+    config.preprocessing.working_long_side = server.preprocessing.working_long_side
+
     config.debug_dir = server.debug_dir
     return overridden
 

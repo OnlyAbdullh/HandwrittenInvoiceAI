@@ -44,6 +44,14 @@ customer, date and most of the totals strip were cut away before anything was re
 A request that omits `margin` gets the default. A settings page that sends `0`
 restores the old crop and loses those fields again.
 
+Before `perspective_correction`, the service shrinks any photo whose long side is
+larger than `preprocessing.working_long_side` (default 2000 px) to that size. Every
+pixel threshold above was tuned at that size; a full-size phone photo read without
+the shrink gave a different, broken layout. It is **server-owned** and not part of
+the wire shape, so the C# side needs no change. Bounding boxes stay in the space of
+the corrected page (`source.width` × `source.height`), which is now at most 2000 px
+on its long side, plus the perspective margin.
+
 ## 3. Sections the request does not control
 
 `ocr`, `persistence` and `string_matching.dictionary_path` are **taken from the

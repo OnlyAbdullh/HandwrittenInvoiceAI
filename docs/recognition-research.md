@@ -144,7 +144,21 @@ The data:
 
 The best fallback combination gained 2 cells (unstable threshold). Routing by kind
 lost. The oracle bound is 0.357. Details are in [experiment-log.md](experiment-log.md).
-That run predates the form-B layout fix and the label fixes, so it will be re-run.
+That run predates the form-B layout fix and the label fixes.
+
+**Re-run after those fixes** (26 cells; the laptop's full-size `onlyone` photo was
+still mis-laid-out, see the experiment log):
+
+| Model | CER | Exact | s/cell |
+|---|---|---|---|
+| Arabic-Qwen3.5-OCR-v4 | **0.245** | **0.346** | 1.99 |
+| Nuqta Q8_0 | 0.321 | 0.269 | 6.22 |
+| Nuqta Q4_K_M | 0.368 | 0.231 | 3.83 |
+| Qwen3-VL-2B | 0.452 | 0.269 | 3.97 |
+| Qwen2.5-VL-3B v3 | 0.562 | 0.192 | 2.12 |
+
+No combination beat Qwen3.5 alone on held-out invoices. Per invoice, Qwen3.5 took
+38 s and 3.5 GB of RAM, against Nuqta's 106 s and 9.9 GB.
 
 **What these numbers can and cannot say:**
 
@@ -245,7 +259,7 @@ photo ─► geometric correction (once) ─┬─► OCR photometric branch ─
   `UNKNOWN_FORM` / `NO_LAYOUT_DETECTED` rather than a guessed layout.
 - **Confidence is uncalibrated, and measured to be a poor accept signal.** On the
   34-cell run, 44–53% of all cells were *wrong* with confidence ≥ 0.75, for every
-  model. Treat OCR confidence only as an ordering for review, never as permission
+  model. On the 26-cell re-run it was 27% for Qwen3.5 and 35–50% for the others. Treat OCR confidence only as an ordering for review, never as permission
   to skip it. For numbers, the arithmetic check (`price × qty = total`,
   `Σ = total`) is the better evidence.
 

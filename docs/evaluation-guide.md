@@ -44,6 +44,9 @@ python tools\export_crops.py --photo bills\onlyone\img.png --out datasets\onlyon
   from the truth file whose `image` is that photo. If the item rows it finds don't
   line up with the truth, it keeps the header labels and leaves the item cells
   unlabelled; it never guesses.
+- **Resolution.** A photo larger than the working resolution (2000 px on its long
+  side) is shrunk first, exactly as the service does, and the export prints
+  `photo WxH, read at wxh`. Use the original photos; there is no need to resize them.
 - **`--crops`** takes several folders. Each cell is keyed by its invoice, so the
   scores can be broken down per invoice.
 - **`--mode pipeline`** reads each model the way the service would: per-kind

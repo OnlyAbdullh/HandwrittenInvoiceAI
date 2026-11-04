@@ -59,7 +59,7 @@ class PipelineOrchestrator:
         # this is what guarantees OCR bboxes and table bboxes end up in the
         # same coordinate space as the image the UI displays on both sides.
         self.geometric_pipeline = PreprocessingPipelineBuilder.build(
-            config.preprocessing.geometric_steps
+            config.preprocessing.pipeline_geometric_steps()
         )
         self.ocr_photometric_pipeline = PreprocessingPipelineBuilder.build(
             config.preprocessing.ocr_photometric_steps

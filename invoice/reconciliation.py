@@ -52,6 +52,13 @@ MAX_DECIMALS = 2
 # longer digit sequence, before it stops being an explanation of that reading.
 MAX_ERROR_RATE = 0.50
 
+# The invoice total may be corrected to the verified line sum when the reading
+# differs from it by at most this many digits (and by at most a quarter of them).
+MAX_TOTAL_EDITS = 2
+
+# The parser's tolerance for "the rows do not add up to the stated total".
+TOTAL_MISMATCH_TOLERANCE = 0.05
+
 _SEPARATORS = re.compile(r"[,.٫،\-_/\\|]")
 
 
@@ -275,15 +282,25 @@ def reconcile(draft: InvoiceDraft) -> InvoiceDraft:
     verification screen, and overwriting it with a guess is what this stage
     exists to avoid.
     """
+    # Rows whose three numbers were all actually read. A cell this stage
+    # derives makes its row multiply out by construction, which verifies
+    # nothing, so only these rows can vouch for the invoice total.
+    fully_read = [all(_has_reading(f) for f in (i.quantity, i.unit_price, i.total_price)) for i in draft.line_items]
     for item in draft.line_items:
         _reconcile_row(item)
 
-    _reconcile_total(draft)
+    _reconcile_total(draft, rows_verified=all(fully_read))
     _refresh_arithmetic_warnings(draft)
+    _refresh_total_warning(draft)
     return draft
 
 
-def _reconcile_total(draft: InvoiceDraft) -> None:
+def _has_reading(field) -> bool:
+    raw = field.raw if field.raw is not None else field.value
+    return bool(digit_sequence("" if raw is None else str(raw)))
+
+
+def _reconcile_total(draft: InvoiceDraft, rows_verified: bool = False) -> None:
     """Repair the invoice total's decimal position against the line totals.
 
     A handwritten "214812.05" comes back as the bare digits "٢١٤٨١٢٠٥" -- the
@@ -309,6 +326,55 @@ def _reconcile_total(draft: InvoiceDraft) -> None:
     matches = [v for v in decimal_candidates(digits) if abs(v - items_sum) <= TOLERANCE]
     if len(matches) == 1:
         total.value = round(matches[0], 2)
+        return
+
+    # A digit misread or dropped, not only a separator: the laptop runs read
+    # 214812.05 as "۴۱۴۸۱۲۰۵" (one digit wrong) and as "٢١٤٨١٢٫٠" (the last
+    # digit dropped). The sum replaces the reading only when every row had all
+    # three numbers read and each one multiplies out -- so every amount in the sum
+    # was verified by its own row -- and the reading differs from the sum by
+    # at most MAX_TOTAL_EDITS digits. It is still a correction, so it is
+    # flagged for the verification screen rather than passed off as read.
+    if not rows_verified or not all(_row_multiplies_out(item) for item in draft.line_items):
+        return
+    expected = digit_sequence(f"{items_sum:.2f}".rstrip("0").rstrip("."))
+    edits = _levenshtein(expected, digits)
+    if 0 < edits <= MAX_TOTAL_EDITS and edits / max(len(expected), len(digits)) <= 0.25:
+        read_as = total.value
+        total.value = items_sum
+        draft.warnings.append(
+            InvoiceWarning(
+                code=WarningCodes.MANUAL_REVIEW_REQUIRED,
+                field="total_amount",
+                message=(
+                    f"The total was read as '{raw}' ({read_as}); every row multiplies out and the "
+                    f"line totals sum to {items_sum:.2f}, which differs from the reading by "
+                    f"{edits} digit(s), so the sum is offered. Confirm it against the paper."
+                ),
+            )
+        )
+
+
+def _refresh_total_warning(draft: InvoiceDraft) -> None:
+    """Re-issue TOTAL_MISMATCH against the reconciled rows and total.
+
+    The parser compares the stated total with the rows as they were read;
+    after the rows and the total are repaired that comparison can be wrong in
+    either direction.
+    """
+    draft.warnings = [w for w in draft.warnings if w.code != WarningCodes.TOTAL_MISMATCH]
+    stated = draft.header.total_amount.value
+    if not draft.line_items or not isinstance(stated, (int, float)):
+        return
+    items_sum = sum(float(item.total_price.value or 0.0) for item in draft.line_items)
+    if abs(items_sum - float(stated)) > TOTAL_MISMATCH_TOLERANCE:
+        draft.warnings.append(
+            InvoiceWarning(
+                code=WarningCodes.TOTAL_MISMATCH,
+                field="total_amount",
+                message=f"Line items sum to {items_sum:.2f} but the stated total is {float(stated):.2f}.",
+            )
+        )
 
 
 def _refresh_arithmetic_warnings(draft: InvoiceDraft) -> None:

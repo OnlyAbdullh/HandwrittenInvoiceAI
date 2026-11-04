@@ -37,7 +37,7 @@ def record(config_path: str, image_path: str, source_label: str | None = None) -
     if image is None:
         raise SystemExit(f"cannot read {image_path}")
 
-    page = PreprocessingPipelineBuilder.build(config.preprocessing.geometric_steps).run(ImagePayload(image=image))
+    page = PreprocessingPipelineBuilder.build(config.preprocessing.pipeline_geometric_steps()).run(ImagePayload(image=image))
     table_input = PreprocessingPipelineBuilder.build(config.preprocessing.table_photometric_steps).run(page)
     result = build_table_extractor(config.table_extraction).extract(table_input)
 

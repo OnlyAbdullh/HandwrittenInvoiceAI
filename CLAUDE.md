@@ -121,7 +121,10 @@ every other module knows only its own interface. `PipelineOrchestrator.run()`:
    recognizers misplace the decimal separator far more often than they misread a digit, so
    every legal separator position is tried and the one satisfying `price × qty = total` is
    kept; a row with two readings and one blank has the third derived. A row the equation
-   cannot settle is left exactly as it was read. It runs on the parsed draft rather than
+   cannot settle is left exactly as it was read. The invoice total is checked against the
+   sum of the line totals the same way. When every row was fully read and multiplies out,
+   a total one or two digits off that sum is corrected to it and flagged
+   `MANUAL_REVIEW_REQUIRED`. It runs on the parsed draft rather than
    inside the parser because it is a property of the three numbers **together**.
 7. Assembles a `PipelineResult` (with a full `config_snapshot` for audit/reproducibility),
    persists it via `ResultStore`, hands it to `output_formatter.format()`.
@@ -388,6 +391,16 @@ anything was read; the "customer" then came back as the column captions. The ste
 `margin` (default 0.15) of the photo around the outline. Form B's dotted-line header fields
 are declared as `unruled_fields` in its profile; re-record `tests/fixtures/form_*_cells.json`
 with `tools/record_layout_fixture.py` after changing any geometric step.
+
+**Every pixel threshold assumes a ~2000 px photo.** The geometric and layout
+stages were tuned on photos with a 2000 px long side; a full-size phone photo
+(4000 px) came out as a different layout (`sahror` at 2×: 36 crops instead of 21;
+the laptop's `onlyone`: phantom rows and no total). The `working_resolution` step,
+prepended by `PreprocessingConfig.pipeline_geometric_steps()`, shrinks larger
+photos (`preprocessing.working_long_side`, server-owned). It never enlarges:
+enlarging measured worse. Build the geometric stage only through
+`pipeline_geometric_steps()`, never from `geometric_steps` directly, or a tool
+will cut cells from a page the service never produces.
 
 **Deskew exists once.** There were three copies (the step, `grid_utils`,
 `temp/table_det.py`) and they disagreed. The survivor folds angles modulo 90 so vertical

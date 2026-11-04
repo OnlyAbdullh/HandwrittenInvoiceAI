@@ -210,6 +210,49 @@ class TestHeaderTotal:
         assert draft.header.total_amount.value == 999.0
 
 
+class TestHeaderTotalFromVerifiedRows:
+    """The total reading is one or two digits off a sum every row verifies."""
+
+    def _draft(self, total_raw):
+        from string_matching.normalization import normalize_price
+
+        draft = InvoiceDraft(line_items=[
+            row(16, 13250, 212000, index=0),
+            row(6, 200, 1200, index=1),
+            row(192, 5.7, 1094.4, index=2),
+            row(87, 5.95, 517.65, index=3),
+        ])
+        draft.header.total_amount = ExtractedValue(value=normalize_price(total_raw), raw=total_raw)
+        return draft
+
+    @pytest.mark.parametrize("reading", ["۴۱۴۸۱۲۰۵", "٢١٤٨١٢٫٠"])  # both laptop readings of 214812.05
+    def test_a_digit_misread_or_dropped_is_corrected_and_flagged(self, reading):
+        draft = reconcile(self._draft(reading))
+        assert draft.header.total_amount.value == 214812.05
+        flagged = [w for w in draft.warnings if w.field == "total_amount"]
+        assert [w.code for w in flagged] == [WarningCodes.MANUAL_REVIEW_REQUIRED]
+
+    def test_a_reading_of_a_different_number_is_left_alone(self):
+        draft = reconcile(self._draft("٥١"))
+        assert draft.header.total_amount.value == 51.0
+        assert WarningCodes.TOTAL_MISMATCH in [w.code for w in draft.warnings]
+
+    def test_not_when_a_row_is_unverified(self):
+        draft = self._draft("۴۱۴۸۱۲۰۵")
+        draft.line_items[1].quantity = ExtractedValue()  # 1200 is no longer confirmed by its row
+        reconcile(draft)
+        assert draft.header.total_amount.value == 41481205.0
+
+    def test_a_stale_total_mismatch_is_withdrawn(self):
+        from core.domain.invoice import InvoiceWarning
+
+        draft = self._draft("٢١٤٨١٢,٠٥")
+        draft.warnings.append(InvoiceWarning(code=WarningCodes.TOTAL_MISMATCH, field="total_amount", message="stale"))
+        reconcile(draft)
+        assert draft.header.total_amount.value == 214812.05
+        assert WarningCodes.TOTAL_MISMATCH not in [w.code for w in draft.warnings]
+
+
 def digit_only(text):
     from string_matching.normalization import digit_sequence
 

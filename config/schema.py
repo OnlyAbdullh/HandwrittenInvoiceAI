@@ -36,6 +36,25 @@ class PreprocessingConfig(BaseModel):
     ocr_photometric_steps: list[StepConfig] = Field(default_factory=list)
     table_photometric_steps: list[StepConfig] = Field(default_factory=list)
 
+    # A photo whose long side is larger than this many pixels is shrunk to it
+    # before the geometric steps (`preprocessing/steps/geometric/
+    # working_resolution.py`). Every pixel threshold in the pipeline was tuned
+    # at this size; a 4000 px photo read without it is, to those thresholds, a
+    # different page. Smaller photos are not enlarged. Server-owned: the
+    # settings page has no control for it. `null` reads every photo at its own
+    # size.
+    working_long_side: int | None = Field(default=2000, ge=500)
+
+    def pipeline_geometric_steps(self) -> list[StepConfig]:
+        """The geometric stage as it runs: the working-resolution shrink, then
+        the configured steps. Every caller that builds the geometric pipeline
+        uses this, so a tool can never cut cells from a page the service would
+        not have produced."""
+        if self.working_long_side is None:
+            return list(self.geometric_steps)
+        scale = StepConfig(name="working_resolution", params={"max_long_side": self.working_long_side})
+        return [scale, *self.geometric_steps]
+
 
 class ComponentConfig(BaseModel):
     """A registered implementation plus its constructor arguments.

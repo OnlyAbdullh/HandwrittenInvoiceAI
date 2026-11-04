@@ -114,6 +114,16 @@ class TestStrategies:
         assert analysis.score(records)["cer"] == 0.0
         assert all(0.3 < t <= 0.95 for t in thresholds)
 
+    def test_a_fallback_that_never_fires_is_not_reported(self, analysis):
+        # The primary is right everywhere and sure of it: the learned threshold
+        # is 0 on both folds, and listing "falling back below 0.0" would only
+        # repeat the primary's score.
+        primary = {c["image"]: {**c, "confidence": 0.9} for c in two_invoices(0.0, 0.0)}
+        models = {"primary": primary, "worse": {c["image"]: c for c in two_invoices(0.5, 0.5)}}
+        report = analysis.analyze(models)
+        assert "falling back to" not in report
+        assert "no threshold beat never falling back" in report
+
     def test_scores(self, analysis):
         s = analysis.score([cell("a", 0, "number", 0.0, value_ok=True), cell("a", 1, "number", 0.5, value_ok=False),
                             cell("a", 2, "arabic_text", 0.0)])

@@ -215,10 +215,15 @@ def analyze(models: dict[str, dict[str, dict]]) -> str:
                 if primary == secondary:
                     continue
                 result = fallback(models, keys, primary, secondary)
-                if result is not None:
+                # A threshold of 0 never falls back: on every fold the training
+                # invoices said "keep the primary", so the row would only repeat
+                # the primary's own score under another name.
+                if result is not None and any(t > 0 for t in result[1]):
                     fallbacks.append((primary, secondary, result))
         for primary, secondary, (records, thresholds) in sorted(fallbacks, key=lambda f: score(f[2][0])["cer"])[:3]:
             row(f"{primary}, falling back to {secondary} below confidence {thresholds}", score(records))
+        if not fallbacks:
+            lines.append("| Confidence fallback: on every fold, no threshold beat never falling back | — | — | — | — |")
         row("Oracle (best per cell, with hindsight -- not achievable)", score(oracle(models, keys)))
 
         lines += ["", "Routing chose, per kind (one entry per fold):", ""]

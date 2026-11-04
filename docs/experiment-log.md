@@ -163,9 +163,84 @@ Found by reading the evaluation against the photos (cloud, real photos, no model
 - **What these fixes do to accuracy is not measured yet.** Re-run on the laptop
   (below).
 
+### 2026-11-04 · Re-run after the form-B fixes
+- **Data:** `sahror` + `onlyone`, re-exported on the laptop: 53 crops, **26
+  labelled**. The same two photos give 41 crops, all 41 labelled, in the cloud.
+  The laptop run therefore covers mostly `sahror` and only part of `onlyone` (see
+  the next entry for why). The per-invoice split is in the report's breakdown.
+- **Where:** laptop, CUDA.
+- **Result, per cell (26 cells):**
+
+  | Model | CER | Exact | Value acc. | s/cell |
+  |---|---|---|---|---|
+  | Arabic-Qwen3.5-OCR-v4 | **0.245** | **0.346** | **0.412** | 1.99 |
+  | Nuqta Q8_0 | 0.321 | 0.269 | 0.353 | 6.22 |
+  | Nuqta Q4_K_M | 0.368 | 0.231 | 0.294 | 3.83 |
+  | Qwen3-VL-2B | 0.452 | 0.269 | 0.235 | 3.97 |
+  | Qwen2.5-VL-3B 4-bit v3 | 0.562 | 0.192 | 0.176 | 2.12 |
+  | TrOCR ×2, Qari | > 1.1 | ≤ 0.04 | 0 | — |
+
+  Not comparable with the 34-cell run: the cell set changed (labels fixed,
+  different `onlyone` coverage). The ranking held.
+- **Result, combinations, leave-one-invoice-out:**
+  - **Routing by kind:** CER 0.481, worse; value accuracy 0.471 vs. 0.412, i.e.
+    one more number cell right out of 17. Noise.
+  - **Confidence fallback:** every learned threshold was 0, so no fallback
+    helped. The report listed three no-op fallback rows. Fixed: such rows are no
+    longer listed.
+  - **Oracle:** 0.125.
+- **Result, calibration:** Qwen3.5 accepted 7 wrong cells at ≥ 0.75 (27% of all
+  cells), down from 47% on the earlier cell set. At 0.90–1.00 it was exact on 8
+  of 12. Still not a safe auto-accept.
+- **Result, invoice evaluation** (laptop photos, at full size, before the next
+  entry's fix):
+
+  | Measure | `default_config` (Qwen3.5) | `nuqta_config` |
+  |---|---|---|
+  | Header fields | 4/9 | 5/9 |
+  | Numeric cells | **10/24** | 5/24 |
+  | Product top-1 | 5/8 | 6/8 |
+  | Phantom / missed rows | 6 / 3 | 1 / 2 |
+  | Seconds per invoice | **38.2** | 105.5 |
+  | Peak RAM | 3.5 GB (worker 3.0 GB) | 9.9 GB (`llama-server` 9.4 GB) |
+
+  - `onlyone` (form B) with Qwen3.5: 6 phantom rows, no invoice number, and the
+    total read as `٥١`. This is a broken layout, not a recognition failure.
+  - Dates: the years were misread as `٢٠٤٦`, `٣٠٢٦` and `١٠٢٦` (truth 2026).
+    These are now refused as implausible rather than parsed into a wrong date.
+    Nuqta read `٢٠٢٦/٨/٧` correctly on `onlyone`.
+  - The `sahror` total was read as `۴۱۴۸۱۲۰۵` (Qwen3.5) and `٢١٤٨١٢٫٠` (Nuqta),
+    each one digit off 214812.05.
+- **Decision:** Qwen3.5-OCR-v4 stays the default (best per cell, 2.8× faster per
+  invoice, a third of the RAM). No combination enabled.
+
+### 2026-11-04 · Photo resolution changed the layout
+- **Problem:** the laptop's photos are the full-size originals, while the copies
+  used for tuning have a long side of 2000 px. Every pixel threshold in the
+  geometric and layout stages was tuned at 2000 px.
+- **Reproduced in the cloud** by scaling the tuning copies:
+  - `sahror` at 2×: 78 boxes, 42 classified, 36 crops (instead of 76/76/21);
+  - `onlyone` at 1.5×: 29 crops.
+- **Fix:** `working_resolution`, the first geometric step. It shrinks any photo
+  whose long side exceeds `preprocessing.working_long_side` (default 2000;
+  server-owned; `null` turns it off) and records the transform. It never
+  enlarges a photo: enlarging measured worse (`onlyone` at 0.7× enlarged lost its
+  item rows; a 1863 px synthetic form A cut 63 cells instead of 57).
+- **Result, cloud, real photos rescaled:** 21/21 and 20/20 labelled cells at
+  0.7×, 1.5× and 2×. At 3× (an upscaled copy shrunk back, so blurred twice),
+  `onlyone` gives 17/17: its last item row is still fragile, a known open item.
+  `export_crops.py` prints the scale it applied.
+- **Also:** the invoice total may now be corrected to the line sum when it is one
+  or two digits off it (not only a misplaced separator). This applies only when
+  every row's three numbers were read and multiply out. The correction is flagged
+  `MANUAL_REVIEW_REQUIRED` on `total_amount`. A stale `TOTAL_MISMATCH` from before
+  reconciliation is re-evaluated.
+- **Not measured yet** with the real models.
+
 ### Pending: needs the laptop
-- Re-export both invoices (the layout and the labels changed), re-run the
-  benchmark on both invoices, then the combination analysis:
+- Re-export both invoices at the working resolution (`export_crops.py` should
+  now print `read at ...x2000` and 41 labelled cells), re-run the benchmark on
+  both invoices, then the combination analysis:
 
   ```powershell
   & D:\OCR\.venv_vlm\Scripts\python.exe tools\benchmark_recognizers.py --crops datasets\sahror datasets\onlyone --mode pipeline

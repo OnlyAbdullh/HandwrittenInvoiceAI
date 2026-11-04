@@ -251,3 +251,18 @@ class TestThresholdPolarity:
         for algorithm in ("fixed_threshold", "otsu_threshold", "adaptive_threshold"):
             step = step_registry.create(algorithm, invert=True)
             assert step.invert is True, algorithm
+
+
+class TestWorkingResolutionIsServerOwned:
+    def test_the_server_value_wins_over_the_request(self):
+        from config.settings_contract import enforce_server_owned
+
+        server = load_config("config/default_config.yaml")
+        server.preprocessing.working_long_side = 1600
+        request = PipelineSettings.from_app_config(load_config("config/default_config.yaml")).to_app_config(
+            table_photometric_steps=server.preprocessing.table_photometric_steps
+        )
+        assert request.preprocessing.working_long_side == 2000  # not on the wire: the default
+
+        enforce_server_owned(request, server)
+        assert request.preprocessing.working_long_side == 1600

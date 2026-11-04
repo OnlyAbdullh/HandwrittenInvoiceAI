@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import pytest
 
+from config.loader import load_config
 from core.domain.image_payload import ImagePayload, PipelineContext
+from preprocessing.pipeline_builder import PreprocessingPipelineBuilder
 from preprocessing.steps.geometric.deskew import HoughDeskewStep
 from preprocessing.steps.geometric.perspective_correction import (
     PerspectiveCorrectionStep,
 )
+from preprocessing.steps.geometric.working_resolution import WorkingResolutionStep
 
 
 def context(image: np.ndarray) -> PipelineContext:
@@ -60,7 +64,7 @@ class TestPerspectiveCorrection:
             return int((gray[: max(top - 10, 0)] < 128).sum())
 
         assert ink_above_table(cropped, 0) == 0  # the number is gone
-        table_top = int(round(0.15 * 900))  # margin x the outline's height
+        table_top = round(0.15 * 900)  # margin x the outline's height
         assert ink_above_table(kept, table_top) > 500  # the number survives
 
     def test_the_margin_is_measured_from_the_outline_and_recorded(self):
@@ -76,8 +80,6 @@ class TestPerspectiveCorrection:
         assert result.payload.metadata["perspective_correction"]["margin"] == 0.1
 
     def test_an_out_of_range_margin_is_rejected(self):
-        import pytest
-
         with pytest.raises(ValueError):
             PerspectiveCorrectionStep(margin=0.8)
 
@@ -113,8 +115,6 @@ class TestPerspectiveCorrection:
         assert result.payload.image.shape[:2] != (1400, 1000)
 
     def test_an_empty_image_is_an_error(self):
-        import pytest
-
         with pytest.raises(ValueError):
             PerspectiveCorrectionStep().apply(context(np.zeros((0, 0, 3), np.uint8)))
 
@@ -235,3 +235,53 @@ class TestDeskew:
 
         assert np.array_equal(result.payload.image, page)
         assert "skipped" in result.payload.metadata["deskew_hough"]
+
+
+class TestWorkingResolution:
+    """A large photo is shrunk to the size every pixel threshold was tuned at."""
+
+    def test_a_large_photo_is_shrunk_to_the_working_long_side(self):
+        result = WorkingResolutionStep(max_long_side=2000).apply(context(blank(4000, 3000)))
+        assert result.payload.image.shape[:2] == (2000, 1500)
+        assert result.payload.metadata["working_resolution"]["scale"] == 0.5
+
+    def test_the_transform_maps_the_photo_onto_the_shrunk_page(self):
+        result = WorkingResolutionStep(max_long_side=2000).apply(context(blank(4000, 3001)))
+        height, width = result.payload.image.shape[:2]
+        x, y = result.payload.transform.apply_to_point(3001, 4000)
+        assert abs(x - width) < 1e-6 and abs(y - height) < 1e-6
+
+    def test_a_photo_at_or_below_the_working_size_is_not_enlarged(self):
+        photo = blank(1863, 1466)
+        result = WorkingResolutionStep(max_long_side=2000).apply(context(photo))
+        assert result.payload.image.shape == photo.shape
+        assert np.allclose(result.payload.transform.matrix, np.eye(3))
+
+    def test_an_absurd_working_size_is_refused(self):
+        with pytest.raises(ValueError, match="at least"):
+            WorkingResolutionStep(max_long_side=100)
+
+    def test_it_runs_first_in_the_geometric_stage(self):
+
+        config = load_config("config/default_config.yaml")
+        steps = config.preprocessing.pipeline_geometric_steps()
+        assert steps[0].name == "working_resolution" and steps[0].params == {"max_long_side": 2000}
+        assert [s.name for s in steps[1:]] == [s.name for s in config.preprocessing.geometric_steps]
+
+        config.preprocessing.working_long_side = None
+        assert config.preprocessing.pipeline_geometric_steps() == config.preprocessing.geometric_steps
+
+    def test_the_same_page_photographed_larger_gives_the_same_page(self):
+        """The whole geometric stage, at the photo's size and at twice it."""
+        photo = blank(2000, 1500, value=90)
+        cv2.rectangle(photo, (120, 150), (1380, 1850), (255, 255, 255), -1)
+        cv2.rectangle(photo, (300, 500), (1200, 1500), (0, 0, 0), 3)
+        big = cv2.resize(photo, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+
+        stage = PreprocessingPipelineBuilder.build(
+            load_config("config/default_config.yaml").preprocessing.pipeline_geometric_steps()
+        )
+        small_page = stage.run(ImagePayload(image=photo)).image
+        big_page = stage.run(ImagePayload(image=big)).image
+        assert abs(small_page.shape[0] - big_page.shape[0]) <= 4
+        assert abs(small_page.shape[1] - big_page.shape[1]) <= 4
