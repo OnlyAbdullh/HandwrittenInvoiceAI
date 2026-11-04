@@ -347,3 +347,41 @@ def test_pipeline_mode_reads_nuqtas_settings_from_the_service_config(bench):
     assert params["prompts"]["number"].startswith("Transcribe the Arabic text")
     # Machine-specific entries are the benchmark's to supply, per candidate.
     assert not {"model_path", "mmproj_path", "server_path", "gpu_layers"} & set(params)
+
+
+class TestRecognitionMetrics:
+    def test_word_error_rate_counts_whole_words(self, bench):
+        assert bench.wer("جاكيت صوف أزرق", "جاكيت صوف ازرق") == 0.0  # same after normalization
+        assert bench.wer("جاكيت قطن أزرق", "جاكيت صوف أزرق") == pytest.approx(0.333, abs=0.001)
+        assert bench.wer("x", None) is None
+
+    def test_value_accuracy_is_strict_about_digits_and_the_decimal_point(self, bench):
+        assert bench.value_correct("٥.٧٠", "5.7", "number", "unit_price") is True
+        assert bench.value_correct("57", "5.7", "number", "unit_price") is False
+        assert bench.value_correct("12", "12", "number", "quantity") is True
+        assert bench.value_correct("13", "12", "number", "quantity") is False
+        assert bench.value_correct("نص", "12", "arabic_text", "product_name") is None
+        assert bench.value_correct("12", None, "number", "quantity") is None
+
+    def test_results_break_down_per_kind_and_per_invoice(self, bench):
+        r = bench.ModelResult(name="m")
+        for source, kind, cer_ in (("a", "number", 0.0), ("a", "arabic_text", 0.5), ("b", "number", 0.2)):
+            r.per_crop.append({"source": source, "kind": kind, "cer": cer_, "value_ok": None})
+        assert r.breakdown("kind")["number"] == {"n": 2, "cer": 0.1, "exact": 0.5, "value_accuracy": None}
+        assert set(r.breakdown("source")) == {"a", "b"}
+        summary = r.summary()
+        assert "by_kind" in summary and "by_invoice" in summary
+
+    def test_peak_memory_of_this_process_is_measurable_here(self, bench):
+        assert (bench.peak_rss_mb() or 0) > 0
+
+    def test_several_invoices_get_distinct_keys(self, bench, tmp_path):
+        for name in ("first", "second"):
+            folder = tmp_path / name / "images"
+            folder.mkdir(parents=True)
+            Image.new("RGB", (20, 10), "white").save(folder / "0.png")
+            (tmp_path / name / "labels.jsonl").write_text(
+                json.dumps({"image": "images/0.png", "text": "1", "kind": "number"}) + "\n", encoding="utf-8")
+        rows = bench.load_crops(tmp_path / "first") + bench.load_crops(tmp_path / "second")
+        assert [r["key"] for r in rows] == ["first/images/0.png", "second/images/0.png"]
+        assert [r["source"] for r in rows] == ["first", "second"]

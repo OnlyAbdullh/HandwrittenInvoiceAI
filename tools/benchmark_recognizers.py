@@ -112,7 +112,7 @@ def strip_caption(text: str) -> str:
     correctly -- the caption just isn't part of what the label says.
     """
     for separator in (":", "："):
-        head, found, tail = text.partition(separator)
+        _, found, tail = text.partition(separator)
         if found and tail.strip():
             return tail.strip()
     return text
@@ -154,6 +154,113 @@ def cer(predicted: str, expected: str | None) -> float | None:
 
 def _is_empty(text: str) -> bool:
     return not (text or "").strip() or (text or "").strip().upper() == "EMPTY"
+
+
+def wer(predicted: str, expected: str | None) -> float | None:
+    """Word error rate on the same normalization as CER; None without a label."""
+    if expected is None:
+        return None
+    truth = normalize_text(expected).split()
+    if not truth:
+        return None
+    guess = normalize_text(predicted).split()
+    # Levenshtein over word tokens: map each distinct word to one character.
+    vocab: dict[str, str] = {}
+    encode = lambda words: "".join(vocab.setdefault(w, chr(0xE000 + len(vocab))) for w in words)
+    return round(levenshtein(encode(guess), encode(truth)) / len(truth), 3)
+
+
+def value_correct(predicted: str, expected: str | None, kind: str, role: str | None) -> bool | None:
+    """Whether a number cell's reading has the right *value*, read as the pipeline reads it.
+
+    Strict where it matters: one wrong digit, or the decimal point in the wrong
+    place, is wrong. Indifferent to what does not change the value: Arabic-Indic
+    or Western digits, "5.70" for "5.7", a printed caption before the number.
+    None for cells that are not numbers, or have no label.
+
+    This is the reading before arithmetic reconciliation, which can still repair
+    a misplaced separator inside the pipeline -- tools/evaluate.py measures that.
+    """
+    if expected is None or kind != "number":
+        return None
+    try:
+        from string_matching.normalization import normalize_price, normalize_quantity
+    except Exception:  # noqa: BLE001
+        return None
+    text = strip_caption(predicted or "")
+    try:
+        truth = float(expected)
+    except ValueError:
+        return None
+    if role == "quantity":
+        value = normalize_quantity(text)
+        return value is not None and value == round(truth)
+    value = normalize_price(text)
+    return value is not None and abs(value - truth) < 0.005
+
+
+def peak_rss_mb(pid: int | None = None) -> float | None:
+    """Peak resident memory of a process (this one by default), in MB, if measurable."""
+    try:
+        import psutil
+
+        info = psutil.Process(pid).memory_info()
+        peak = getattr(info, "peak_wset", None) or getattr(info, "rss", None)
+        return round(peak / 2**20, 1) if peak else None
+    except Exception:  # noqa: BLE001, S110 - psutil is optional; fall through to the OS
+        pass
+    if sys.platform.startswith("linux"):
+        status = Path(f"/proc/{pid or 'self'}/status")
+        try:
+            for line in status.read_text().splitlines():
+                if line.startswith("VmHWM:"):
+                    return round(int(line.split()[1]) / 1024, 1)
+        except OSError:
+            return None
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class Counters(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+                    (name, ctypes.c_size_t) for name in (
+                        "PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage", "QuotaPagedPoolUsage",
+                        "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")
+                ]
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            handle = kernel32.GetCurrentProcess() if pid is None else kernel32.OpenProcess(0x1000 | 0x0010, False, pid)
+            counters = Counters()
+            counters.cb = ctypes.sizeof(Counters)
+            ok = kernel32.K32GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb)
+            if pid is not None:
+                kernel32.CloseHandle(handle)
+            return round(counters.PeakWorkingSetSize / 2**20, 1) if ok else None
+        except Exception:  # noqa: BLE001
+            return None
+    return None
+
+
+def gpu_mb_for_pid(pid: int) -> float | None:
+    """VRAM a process holds now, from nvidia-smi, if there is an NVIDIA GPU."""
+    import shutil
+    import subprocess
+
+    smi = shutil.which("nvidia-smi")
+    if smi is None:
+        return None
+    try:
+        out = subprocess.run([smi, "--query-compute-apps=pid,used_memory", "--format=csv,noheader,nounits"],
+                             capture_output=True, text=True, timeout=15, check=False).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in out.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) == 2 and parts[0] == str(pid):
+            return float(parts[1])
+    return None
 
 
 def passes_validation(text: str, kind: str) -> bool | None:
@@ -487,7 +594,11 @@ class GGUFReader(Reader):
             return
 
         from ocr.llamacpp.client import LlamaCppVisionBackend
-        from ocr.llamacpp.server import LlamaServer, LlamaServerSettings, resolve_executable
+        from ocr.llamacpp.server import (
+            LlamaServer,
+            LlamaServerSettings,
+            resolve_executable,
+        )
 
         # Generic: the model's own defaults, like every other model gets --
         # including the image size its projector declares.
@@ -559,6 +670,8 @@ class ModelResult:
     device: str | None = None
     load_s: float = 0.0
     per_crop: list[dict] = field(default_factory=list)
+    peak_ram_mb: float | None = None
+    peak_vram_mb: float | None = None
 
     def _mean(self, key: str, rows=None):
         values = [c[key] for c in (rows if rows is not None else self.per_crop) if c.get(key) is not None]
@@ -572,6 +685,33 @@ class ModelResult:
     def exact_match_rate(self) -> float | None:
         scored = [c for c in self.per_crop if c.get("cer") is not None]
         return round(sum(c["cer"] == 0.0 for c in scored) / len(scored), 3) if scored else None
+
+    @property
+    def mean_wer(self) -> float | None:
+        return self._mean("wer")
+
+    @property
+    def value_accuracy(self) -> float | None:
+        """Share of labelled number cells whose reading has exactly the right value."""
+        checked = [c for c in self.per_crop if c.get("value_ok") is not None]
+        return round(sum(bool(c["value_ok"]) for c in checked) / len(checked), 3) if checked else None
+
+    def breakdown(self, key: str) -> dict[str, dict]:
+        """The headline metrics per cell kind (key="kind") or per invoice (key="source")."""
+        groups: dict[str, list[dict]] = {}
+        for c in self.per_crop:
+            groups.setdefault(str(c.get(key)), []).append(c)
+        out = {}
+        for name, rows in sorted(groups.items()):
+            scored = [c for c in rows if c.get("cer") is not None]
+            values = [c for c in rows if c.get("value_ok") is not None]
+            out[name] = {
+                "n": len(rows),
+                "cer": self._mean("cer", rows),
+                "exact": round(sum(c["cer"] == 0.0 for c in scored) / len(scored), 3) if scored else None,
+                "value_accuracy": round(sum(bool(c["value_ok"]) for c in values) / len(values), 3) if values else None,
+            }
+        return out
 
     @property
     def empty_rate(self) -> float | None:
@@ -597,10 +737,16 @@ class ModelResult:
             "skipped_reason": self.skipped_reason, "mean_cer": self.mean_cer,
             "exact_match_rate": self.exact_match_rate, "valid_rate": self.valid_rate,
             "empty_rate": self.empty_rate, "mean_seconds": self.mean_seconds, "mean_confidence": self.mean_confidence,
+            "mean_wer": self.mean_wer, "value_accuracy": self.value_accuracy,
+            "peak_ram_mb": self.peak_ram_mb, "peak_vram_mb": self.peak_vram_mb,
+            "by_kind": self.breakdown("kind"), "by_invoice": self.breakdown("source"),
         }
 
 
 def load_crops(crops_dir: Path) -> list[dict]:
+    """One exported crop folder. Each row gets a `key` unique across folders and
+    a `source` naming its invoice, so several invoices can be scored together
+    and broken down per invoice."""
     from PIL import Image
 
     rows = []
@@ -609,6 +755,8 @@ def load_crops(crops_dir: Path) -> list[dict]:
             continue
         row = json.loads(line)
         row["pil"] = Image.open(crops_dir / row["image"]).convert("RGB")
+        row["key"] = f"{crops_dir.name}/{row['image']}"
+        row["source"] = crops_dir.name
         rows.append(row)
     return rows
 
@@ -640,9 +788,13 @@ def run_model(candidate: Candidate, crops: list[dict], max_crops: int | None, mo
             seconds = round(time.perf_counter() - started, 2)
             errored = text.startswith("<error:")
             result.per_crop.append({
-                "image": row["image"], "cell": row.get("cell"), "kind": row.get("kind"), "role": row.get("role"),
+                "image": row.get("key", row["image"]), "source": row.get("source"), "cell": row.get("cell"),
+                "kind": row.get("kind"), "role": row.get("role"),
                 "expected": row.get("text"), "predicted": text,
                 "cer": None if errored else cer(text, row.get("text")),
+                "wer": None if errored else wer(text, row.get("text")),
+                "value_ok": (False if errored and row.get("text") is not None and row.get("kind") == "number"
+                             else value_correct(text, row.get("text"), row.get("kind") or "any", row.get("role"))),
                 # Every exported crop holds ink (the blank-cell gate dropped the
                 # rest), so an empty reading is a miss -- not a pass, even though
                 # the validator accepts "" as a legitimately blank cell.
@@ -650,9 +802,27 @@ def run_model(candidate: Candidate, crops: list[dict], max_crops: int | None, mo
                 "valid": False if errored or _is_empty(text) else passes_validation(text, row.get("kind") or "any"),
                 "confidence": confidence, "seconds": seconds,
             })
+        result.peak_ram_mb, result.peak_vram_mb = _memory_of(reader)
     finally:
         reader.close()
     return result
+
+
+def _memory_of(reader: Reader) -> tuple[float | None, float | None]:
+    """Peak RAM and VRAM the model used: in this process, or in its llama-server."""
+    server = getattr(reader, "server", None)
+    proc = getattr(server, "_proc", None) if server is not None else None
+    if proc is not None and proc.poll() is None:
+        return peak_rss_mb(proc.pid), gpu_mb_for_pid(proc.pid)
+    vram = None
+    if getattr(reader, "device", "") == "cuda":
+        try:
+            import torch
+
+            vram = round(torch.cuda.max_memory_allocated() / 2**20, 1)
+        except Exception:  # noqa: BLE001
+            vram = None
+    return peak_rss_mb(), vram
 
 
 def rank(results: list[ModelResult]) -> tuple[list[ModelResult], bool]:
@@ -680,22 +850,35 @@ def to_markdown(results: list[ModelResult], mode: str, crops_dir: str) -> str:
          "not empty, and accepted by the pipeline's output validation. A sanity check, not accuracy. Judge the readings in the HTML "
          "report, or fill in `text` in labels.jsonl and run again for real scores."),
         "",
-        "| Rank | Model | Family | Device | Mean CER | Exact match | Usable reading | Empty | Mean confidence | Mean s/crop | Load s |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| Rank | Model | Family | Device | Mean CER | Mean WER | Exact match | Number value accuracy | Usable reading | Empty | Mean confidence | Mean s/crop | Load s | Peak RAM MB | Peak VRAM MB |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for i, r in enumerate(ranked, 1):
         lines.append(
-            f"| {i} | {r.name} | {r.family} | {r.device} | {r.mean_cer} | {r.exact_match_rate} | "
-            f"{r.valid_rate} | {r.empty_rate} | {r.mean_confidence} | {r.mean_seconds} | {r.load_s} |"
+            f"| {i} | {r.name} | {r.family} | {r.device} | {r.mean_cer} | {r.mean_wer} | {r.exact_match_rate} | "
+            f"{r.value_accuracy} | {r.valid_rate} | {r.empty_rate} | {r.mean_confidence} | {r.mean_seconds} | "
+            f"{r.load_s} | {r.peak_ram_mb} | {r.peak_vram_mb} |"
         )
+    if labelled:
+        for key, title in (("kind", "By cell kind"), ("source", "By invoice")):
+            groups = sorted({g for r in ranked for g in r.breakdown(key)})
+            lines += ["", f"## {title} (CER / exact / number value accuracy; n = cells)", "",
+                      "| Model | " + " | ".join(groups) + " |", "|---|" + "---|" * len(groups)]
+            for r in ranked:
+                b = r.breakdown(key)
+                cells = [f"{b[g]['cer']} / {b[g]['exact']} / {b[g]['value_accuracy']} (n={b[g]['n']})" if g in b else "–"
+                         for g in groups]
+                lines.append(f"| {r.name} | " + " | ".join(cells) + " |")
     if skipped:
         lines += ["", "## Skipped", "", "| Model | Reason |", "|---|---|"]
         for r in skipped:
             lines.append(f"| {r.name} | {r.skipped_reason} |")
     for r in ranked:
-        lines += [f"\n## {r.name}\n", "| Cell | Kind | Expected | Predicted | CER | Valid |", "|---|---|---|---|---|---|"]
+        lines += [f"\n## {r.name}\n", "| Invoice | Cell | Kind | Expected | Predicted | CER | Value ok | Valid |",
+                  "|---|---|---|---|---|---|---|---|"]
         for c in r.per_crop:
-            lines.append(f"| {c['cell']} | {c['kind']} | {c['expected']} | {c['predicted']} | {c['cer']} | {c['valid']} |")
+            lines.append(f"| {c.get('source')} | {c['cell']} | {c['kind']} | {c['expected']} | {c['predicted']} | "
+                         f"{c['cer']} | {c.get('value_ok')} | {c['valid']} |")
     return "\n".join(lines)
 
 
@@ -732,7 +915,7 @@ def to_html(results: list[ModelResult], crops: list[dict], mode: str, crops_dir:
     for row in crops:
         cells = []
         for r in ranked:
-            c = by_model[r.name].get(row["image"])
+            c = by_model[r.name].get(row.get("key", row["image"]))
             if c is None:
                 cells.append("<td></td>")
                 continue
@@ -822,6 +1005,7 @@ def run_isolated(candidate: Candidate, command: list[str], result_file: Path) ->
         return ModelResult(
             name=data["name"], family=data.get("family", ""), skipped_reason=data.get("skipped_reason"),
             device=data.get("device"), load_s=data.get("load_s", 0.0), per_crop=data.get("per_crop", []),
+            peak_ram_mb=data.get("peak_ram_mb"), peak_vram_mb=data.get("peak_vram_mb"),
         )
     last = " | ".join(list(tail)[-3:])
     return ModelResult(
@@ -843,7 +1027,8 @@ def write_reports(out: Path, results: list[ModelResult], crops: list[dict], mode
 def main(argv: list[str] | None = None) -> int:
     global LLAMACPP_CONFIG
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--crops", default="datasets/crops")
+    ap.add_argument("--crops", nargs="+", default=["datasets/crops"],
+                    help="one or more exported crop folders (one per invoice); scored together and per invoice")
     ap.add_argument("--models", default=str(MODELS_DIR))
     ap.add_argument("--only", nargs="*", help="run only models whose name contains one of these")
     ap.add_argument("--max-crops", type=int, default=None, help="cap crops per model, for a quick pass")
@@ -863,18 +1048,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--result-file", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
-    LLAMACPP_CONFIG = Path(args.llamacpp_config)  # noqa: F841 - module global, read by GGUFReader
+    LLAMACPP_CONFIG = Path(args.llamacpp_config)
     if not LLAMACPP_CONFIG.is_absolute():
         LLAMACPP_CONFIG = PROJECT_ROOT / LLAMACPP_CONFIG
 
-    crops_path = Path(args.crops)
-    if not crops_path.is_absolute():
-        crops_path = PROJECT_ROOT / crops_path
-    if not (crops_path / "labels.jsonl").exists():
-        print(f"No crops at {crops_path}. Make them first, in the service's venv:\n"
-              f"  python tools/export_crops.py --photo <your invoice photo> --out {args.crops}", file=sys.stderr)
+    crops_paths = [Path(c) if Path(c).is_absolute() else PROJECT_ROOT / c for c in args.crops]
+    missing = [str(c) for c in crops_paths if not (c / "labels.jsonl").exists()]
+    if missing:
+        print(f"No crops at {', '.join(missing)}. Make them first, in the service's venv:\n"
+              f"  python tools/export_crops.py --photo <your invoice photo> --out <folder>", file=sys.stderr)
         return 2
-    crops = load_crops(crops_path)
+    crops = [row for path in crops_paths for row in load_crops(path)]
     gpu_layers = None if (args.gpu_layers or "auto").lower() == "auto" else args.gpu_layers
 
     if args.result_file:
@@ -888,10 +1072,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     labelled = sum(row.get("text") is not None for row in crops)
-    print(f"{len(crops)} crop(s) from {crops_path} ({labelled} labelled). Mode: {args.mode}.")
+    print(f"{len(crops)} crop(s) from {len(crops_paths)} invoice folder(s) ({labelled} labelled). Mode: {args.mode}.")
     if labelled and labelled < 5:
         print(f"Only {labelled} crop(s) carry a correct answer, so error rates rest on very little. "
-              f"Type the right text into the other `text` fields of {crops_path / 'labels.jsonl'} for a real comparison.")
+              "Type the right text into the other `text` fields of the labels.jsonl files for a real comparison.")
 
     candidates = discover(Path(args.models), args.only)
     if not candidates:
@@ -914,7 +1098,7 @@ def main(argv: list[str] | None = None) -> int:
                 result_file = Path(scratch) / f"{index}.json"
                 command = [
                     sys.executable, str(Path(__file__).resolve()),
-                    "--crops", str(crops_path), "--models", str(args.models), "--mode", args.mode,
+                    "--crops", *map(str, crops_paths), "--models", str(args.models), "--mode", args.mode,
                     "--llama-server", args.llama_server, "--exact", candidate.name, "--result-file", str(result_file),
                     "--llamacpp-config", str(LLAMACPP_CONFIG),
                 ]
@@ -931,7 +1115,7 @@ def main(argv: list[str] | None = None) -> int:
                       f"usable {result.valid_rate}, empty {result.empty_rate}, {result.mean_seconds}s/crop (load {result.load_s}s)")
             results.append(result)
             # After every model: a run interrupted later still leaves a report.
-            write_reports(out, results, crops, args.mode, args.crops)
+            write_reports(out, results, crops, args.mode, ", ".join(args.crops))
 
     ranked, by_cer = rank(results)
     print("\nRanking (" + ("lowest CER first" if by_cer else "no labels: most usable readings first") + "):")
