@@ -450,6 +450,37 @@ surya-ocr"), not just "unknown".
 Hugging Face for its models), so both Surya approaches are untested here beyond
 config loading and the box-assignment logic.
 
+### 2026-11-04 · All four reading approaches, same invoices (`compare_pipelines.py`)
+- **Where:** laptop. Qwen on CUDA; Surya on the CPU (`TORCH_DEVICE=cpu`, since
+  the 4 GB GPU holds Qwen). Same preprocessing and layout for all four.
+- **Result:**
+
+  | Rank | Approach | Complete | Header | Numbers | Phantom / missed | s / invoice | Peak RAM MB |
+  |---|---|---|---|---|---|---|---|
+  | 1 | **Grid cells → Qwen3.5-OCR-v4** (`default_config`) | **1/2** | **8/9** | **22/24** | 0 / 0 | **14.5** | **2888** |
+  | 2 | Surya boxes → cells → Qwen3.5 (`qwen_detector_config`) | 0/2 | 5/9 | 10/24 | 0 / 0 | 25.6 | 5180 |
+  | 3 | Grid cells → Nuqta Q4 (`nuqta_config`) | 0/2 | 5/9 | 8/24 | 0 / 0 | 59.5 | 9365 |
+  | 4 | Surya alone (`surya_config`) | 0/2 | 3/9 | 0/24 | 0 / 0 | 63.7 | 4827 |
+
+  Product top-1 was 8/8 for all four, even Surya alone. The evaluation catalog has
+  only 9 products, so any reading matches the right one. It does not separate
+  approaches on this data.
+- **Reading it:**
+  - **Surya + Qwen** reads with the same model as rank 1, so the whole gap (22 →
+    10 numbers, 8 → 5 header) comes from Surya's crops: tight boxes around the
+    ink it found, instead of the whole cell. It is also 1.8× slower and uses
+    1.8× the RAM.
+  - **Surya alone** does not read handwritten Arabic digits at all (0/24).
+  - **Nuqta Q4** in the full pipeline reads numbers far worse than Qwen3.5
+    (8 vs. 22), and is 4× slower with 3× the RAM.
+- **Decision:** grid cells → Arabic-Qwen3.5-OCR-v4 stays the default. It is first
+  on every measure, accuracy, speed and memory, on both invoices. Surya is not
+  used for known forms.
+
+  The one role left open for Surya is reading forms the classifier does not
+  recognise (`NO_LAYOUT_DETECTED` today). That is untested: no such invoice is
+  labelled. Revisit only with one.
+
 ### Pending: needs the laptop
 - Re-export both invoices at the working resolution (`export_crops.py` should
   now print `read at ...x2000` and 41 labelled cells), re-run the benchmark on

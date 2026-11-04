@@ -158,7 +158,7 @@ fill the hooks. Selected by `flow.name` in config.
 | Flow | Reads by | Notes |
 |---|---|---|
 | `single_engine` | one `OCREngine` over the whole page | `stub`, `tesseract`, `surya`, `qwen_vlm`. The schema's fallback; the shipped configs use `layout_driven`. |
-| `detector_driven` | detector → refiner → cropper → recognizer | What `surya_qwen` used to be, decomposed. Reads text outside any ruled box; misses short isolated digits the detector never boxes. With `assign_to_layout: true` (`qwen_detector_config.yaml`), each box is clipped to the classified cells it overlaps and takes their kind and id, so no column fractions are declared. |
+| `detector_driven` | detector → refiner → cropper → recognizer | Measured against the default (`tools/compare_pipelines.py`, `docs/experiment-log.md`): same recognizer, 10/24 numbers vs 22/24, slower, more RAM. Not used for known forms. What `surya_qwen` used to be, decomposed. Reads text outside any ruled box; misses short isolated digits the detector never boxes. With `assign_to_layout: true` (`qwen_detector_config.yaml`), each box is clipped to the classified cells it overlaps and takes their kind and id, so no column fractions are declared. |
 | `layout_driven` (**shipped default**) | the printed grid → cropper → recognizer | Each classified cell is read with the prompt its **role** implies, so the grid supplies real column boundaries and nothing is declared. **No detector is constructed at all.** Text outside a ruled box is not read; an unruled page returns empty plus a `NO_LAYOUT_DETECTED` warning rather than silently falling back to another strategy. |
 
 Each flow declares its expensive collaborators in `REQUIRES`, and `flows/components.py`

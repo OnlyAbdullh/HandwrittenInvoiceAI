@@ -180,6 +180,20 @@ Qwen3.5 is clearly first again.
 With every cell read perfectly (`evaluate.py --perfect-readings`), both invoices
 come out 100% right. All remaining error is recognition.
 
+**Whole pipelines compared** (`tools/compare_pipelines.py`, same preprocessing and
+layout, laptop):
+
+| Approach | Header | Numbers | s / invoice | Peak RAM |
+|---|---|---|---|---|
+| **Grid cells → Qwen3.5-OCR-v4** | **8/9** | **22/24** | **14.5** | **2.9 GB** |
+| Surya boxes → Qwen3.5 | 5/9 | 10/24 | 25.6 | 5.2 GB |
+| Grid cells → Nuqta Q4 | 5/9 | 8/24 | 59.5 | 9.4 GB |
+| Surya alone | 3/9 | 0/24 | 63.7 | 4.8 GB |
+
+The grid-driven pipeline with Qwen3.5 is first on every measure. Surya's crops cost
+Qwen more than half its numbers, and Surya's own recognizer reads no handwritten
+digit.
+
 **What these numbers can and cannot say:**
 
 - **The data is small.** 20 cells means one cell is 5 points of exact-match, so ranks
