@@ -431,3 +431,18 @@ class TestPerfectReadings:
         )
         assert [r.text for r in readings] == ["212000", "0001901", "", ""]
         assert evaluate.PerfectReadings.unlabelled == ["r9c0", "r1c4"]
+
+
+def test_evaluate_prints_arabic_and_symbols_through_a_cp1252_pipe(monkeypatch):
+    """On Windows a pipe defaults to cp1252: printing the report's "≥" there
+    crashed every run of compare_pipelines.py after the evaluation was done."""
+    import io
+    import sys
+
+    evaluate = _load("evaluate")
+    out = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", out)
+    evaluate.utf8_console()
+    print("≥ 0.75 أبو جمال")
+    out.flush()
+    assert out.buffer.getvalue().decode("utf-8") == "≥ 0.75 أبو جمال\n"

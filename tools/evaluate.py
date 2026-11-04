@@ -149,7 +149,17 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def utf8_console() -> None:
+    """Print Arabic and symbols like "≥" even where the console or pipe is cp1252."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main() -> int:
+    utf8_console()
     args = parse_args()
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 
@@ -230,9 +240,9 @@ def main() -> int:
 
     config_name = Path(args.config).name
     report = to_markdown(scores, config_name, run_info)
-    print()
-    print(report)
 
+    # Written before anything is printed: a console that cannot show a
+    # character must never cost the measurement (a Windows pipe is cp1252).
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{datetime.now():%Y%m%d-%H%M%S}-{Path(args.config).stem}" + (f"-{args.label}" if args.label else "")
@@ -254,6 +264,8 @@ def main() -> int:
         ),
         encoding="utf-8",
     )
+    print()
+    print(report)
     print(f"\nReport: {out_dir / (stem + '.md')}")
     return 0
 

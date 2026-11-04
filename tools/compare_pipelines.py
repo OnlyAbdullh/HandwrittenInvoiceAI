@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -55,13 +56,17 @@ def run_one(config: Path, out_root: Path, passthrough: list[str]) -> dict:
 
     command = [sys.executable, str(PROJECT_ROOT / "tools" / "evaluate.py"), "--config", str(config),
                "--out", str(out_dir), "--label", "compare", *passthrough]
+    # The child prints Arabic and "≥"; on Windows a pipe defaults to cp1252,
+    # which cannot encode them. UTF-8 mode for the child, UTF-8 when reading it.
+    env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
     started = time.perf_counter()
     proc = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                          cwd=PROJECT_ROOT, check=False)
+                          cwd=PROJECT_ROOT, env=env, check=False)
     wall = round(time.perf_counter() - started, 1)
 
+    # A report that was written counts even if the process failed afterwards.
     reports = sorted(out_dir.glob("*.json"))
-    if proc.returncode != 0 or not reports:
+    if not reports:
         tail = [line for line in (proc.stderr or proc.stdout or "").strip().splitlines() if line.strip()]
         return {"config": config.name, "error": tail[-1] if tail else f"exit code {proc.returncode}", "wall": wall}
 
@@ -120,6 +125,11 @@ def to_markdown(results: list[dict]) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--configs", nargs="+", type=Path, default=[Path(c) for c in DEFAULT_CONFIGS])
     ap.add_argument("--out", type=Path, default=Path("evaluation/reports"))
