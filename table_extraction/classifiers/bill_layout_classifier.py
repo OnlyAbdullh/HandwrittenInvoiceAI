@@ -26,8 +26,11 @@ hundreds of pixels; its position relative to the header does not.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 
+from core.domain.geometry import BoundingBox
 from core.domain.layout import InvoiceLayout, LayoutRegion
 from core.domain.roles import CellRole, Zone, content_kind_for
 from core.domain.table import TableCell, TableExtractionResult
@@ -71,6 +74,12 @@ DEFAULT_FOOTER_ROLES: tuple[str, ...] = (
 )
 
 
+# The written columns of an item row -- what item_vertical_shift moves.
+_ITEM_CELL_ROLES = frozenset(
+    {CellRole.PRODUCT_NAME, CellRole.QUANTITY, CellRole.UNIT_PRICE, CellRole.LINE_TOTAL, CellRole.NOTES}
+)
+
+
 class _Cell:
     """A TableCell with the centres the geometry rules need.
 
@@ -78,13 +87,14 @@ class _Cell:
     state of classification lives here instead of being written back onto it.
     """
 
-    __slots__ = ("cell", "x_center", "y_center", "role")
+    __slots__ = ("cell", "x_center", "y_center", "role", "synthesized")
 
-    def __init__(self, cell: TableCell):
+    def __init__(self, cell: TableCell, synthesized: bool = False):
         self.cell = cell
         self.x_center = cell.bbox.x + cell.bbox.w / 2.0
         self.y_center = cell.bbox.y + cell.bbox.h / 2.0
         self.role = CellRole.UNKNOWN
+        self.synthesized = synthesized
 
 
 def _cluster_rows(cells: list[_Cell], y_proximity: float | None = None) -> list[list[_Cell]]:
@@ -165,6 +175,8 @@ class BillLayoutClassifier:
         ragged_row_slack: int = 5,
         printed_header_row: bool = True,
         footer_from_below: bool = False,
+        complete_grid: bool = False,
+        item_vertical_shift: float = 0.0,
         profile_name: str = "default",
         profiles: list[dict] | None = None,
     ):
@@ -201,6 +213,24 @@ class BillLayoutClassifier:
         # than the row after the items: on a form whose last ruled rows are
         # ragged, "the next row" is a broken item row, not the totals.
         self.footer_from_below = footer_from_below
+
+        # Rebuild item rows the extractor only partly found. A printed form has
+        # a known number of rows, evenly spaced, in fixed columns: when one
+        # break in a rule (or a rounded box corner) leaves a cell's contour
+        # open, that cell -- and with it the row -- is lost, and every row
+        # below is labelled one position off. Measured on both real form-B
+        # photos: the first item row was lost exactly that way.
+        self.complete_grid = complete_grid
+
+        # Move each item cell's box down (positive) or up by this fraction of
+        # its height. On a form whose writing sits ON the row rule rather than
+        # between two rules, the printed cell holds the bottom of the row above
+        # and loses the bottom of its own writing; shifting the box recentres
+        # the crop on the writing. Off by default: whether it helps a given
+        # model is a measurement (tools/benchmark_recognizers.py), not a guess.
+        if not -0.5 <= item_vertical_shift <= 0.5:
+            raise ValueError(f"bill_layout: item_vertical_shift must be within [-0.5, 0.5], got {item_vertical_shift}.")
+        self.item_vertical_shift = item_vertical_shift
 
         # Other printed forms this classifier recognises, each a full set of
         # the parameters above. The page is labelled by whichever profile -- this
@@ -259,14 +289,16 @@ class BillLayoutClassifier:
         below = [c for c in cells if c.y_center > bottom + tol]
 
         rows = _cluster_rows(inside)
-        totals_row = self._label_table(rows, below)
+        totals_row, synthesized = self._label_table(rows, below, top, bottom)
+        cells.extend(synthesized)
         self._label_header(above)
         self._label_footer(totals_row)
 
         regions = [
             LayoutRegion(
-                id=f"{c.cell.table_id}:r{c.cell.row}c{c.cell.col}",
-                bbox=c.cell.bbox,
+                # "s": a cell the grid completion inferred rather than detected.
+                id=f"{c.cell.table_id}:r{c.cell.row}c{c.cell.col}" + ("s" if c.synthesized else ""),
+                bbox=self._item_box(c),
                 role=c.role,
                 zone=self._zone_of(c, top, bottom),
                 content_kind=content_kind_for(c.role),
@@ -290,6 +322,12 @@ class BillLayoutClassifier:
             raw_output=table.raw_extractor_output,
         )
 
+    def _item_box(self, c: _Cell) -> BoundingBox:
+        box = c.cell.bbox
+        if not self.item_vertical_shift or c.role not in _ITEM_CELL_ROLES:
+            return box
+        return replace(box, y=box.y + int(round(self.item_vertical_shift * box.h)))
+
     def _zone_of(self, c: _Cell, top: int, bottom: int) -> Zone:
         if c.y_center < top - self.zone_tolerance:
             return Zone.HEADER
@@ -301,8 +339,12 @@ class BillLayoutClassifier:
     # The item table
     # ------------------------------------------------------------------
 
-    def _label_table(self, rows: list[list[_Cell]], below: list[_Cell]) -> list[_Cell]:
-        """Label the column-header row and the data rows. Returns the totals row.
+    def _label_table(
+        self, rows: list[list[_Cell]], below: list[_Cell], top: float, bottom: float
+    ) -> tuple[list[_Cell], list[_Cell]]:
+        """Label the column-header row and the data rows.
+
+        Returns the totals row and any cells the grid completion synthesized.
 
         The table block is found as the longest **run** of rows holding about
         the right number of cells, rather than by counting from the top. A stray
@@ -315,7 +357,7 @@ class BillLayoutClassifier:
             # parser falls back to its heuristics -- which is the correct
             # outcome for a form this classifier does not actually fit, and far
             # better than labelling arbitrary cells with confident-looking roles.
-            return self._totals_from_below(below)
+            return self._totals_from_below(below), []
 
         table_rows = rows[run_start : run_start + run_len]
         if self.printed_header_row:
@@ -325,6 +367,16 @@ class BillLayoutClassifier:
 
         slot_centers, avg_col_width = self._column_template(table_rows)
         valid = [c for c in slot_centers if c is not None]
+
+        # Index in `rows` just past the last data row; the totals strip is
+        # looked for from there.
+        first_data = run_start + (1 if self.printed_header_row else 0)
+        after_data = first_data + len(data_rows)
+        synthesized: list[_Cell] = []
+        if self.complete_grid and len(data_rows) < self.table_row_count:
+            data_rows, after_data, synthesized = self._complete_rows(
+                rows, data_rows, first_data, table_rows, slot_centers, avg_col_width, top, bottom
+            )
 
         for row, is_header in [(header_row, True)] + [(r, False) for r in data_rows]:
             for cell in row:
@@ -342,16 +394,162 @@ class BillLayoutClassifier:
         # table's outer rule enclosed it, and a separate group below when it did
         # not. Both happen on real scans depending on how the form is printed.
         if self.footer_from_below:
-            return self._totals_from_below(below)
+            return self._totals_from_below(below), synthesized
 
-        after_data = run_start + (1 if self.printed_header_row else 0) + len(data_rows)
-        after_run = run_start + run_len
+        after_run = max(run_start + run_len, after_data)
 
         if after_data < len(rows):
-            return rows[after_data]
+            return rows[after_data], synthesized
         if after_run < len(rows):
-            return rows[after_run]
-        return self._totals_from_below(below)
+            return rows[after_run], synthesized
+        return self._totals_from_below(below), synthesized
+
+    # ------------------------------------------------------------------
+    # Grid completion
+    # ------------------------------------------------------------------
+
+    def _complete_rows(
+        self,
+        rows: list[list[_Cell]],
+        data_rows: list[list[_Cell]],
+        first_data: int,
+        table_rows: list[list[_Cell]],
+        slot_centers: list[float | None],
+        avg_col_width: float | None,
+        top: float,
+        bottom: float,
+    ) -> tuple[list[list[_Cell]], int, list[_Cell]]:
+        """Extend the data rows to `table_row_count`, filling missing cells.
+
+        Works outward from the run of fully detected rows, one row pitch at a
+        time: a detected (possibly partial) row at the expected height is
+        taken as the next item row; where none was detected but the band still
+        lies inside the table outline, an empty band is assumed. It never
+        reaches above the printed column-header row or outside the table's
+        outline, so neither the header nor the totals strip can become an item.
+
+        Returns (data rows, index in `rows` past the last one, synthesized cells).
+        """
+        clean = [r for r in table_rows if len(r) == self.table_col_count] or table_rows
+        centers = [float(np.mean([c.y_center for c in r])) for r in clean]
+        pitch = (
+            float(np.median(np.diff(centers))) if len(centers) >= 2
+            else float(np.median([c.cell.bbox.h for r in clean for c in r]))
+        )
+        if pitch <= 0:
+            return data_rows, first_data + len(data_rows), []
+
+        def row_center(row: list[_Cell], fallback: float) -> float:
+            return float(np.mean([c.y_center for c in row])) if row else fallback
+
+        bands: list[tuple[list[_Cell], float]] = [(r, row_center(r, 0.0)) for r in data_rows]
+        need = self.table_row_count - len(bands)
+        lo, hi = first_data - 1, first_data + len(data_rows)
+        margin = 0.25 * pitch
+
+        # Upward -- only when the form has no printed header row in the grid,
+        # since otherwise the row above the first item IS that header.
+        expected = bands[0][1] - pitch
+        while need > 0 and not self.printed_header_row and expected - pitch / 2 >= top - margin:
+            if lo >= 0 and abs(row_center(rows[lo], expected) - expected) < pitch / 2:
+                bands.insert(0, (rows[lo], expected))
+                lo -= 1
+            elif lo < 0 or row_center(rows[lo], expected) < expected - pitch / 2:
+                bands.insert(0, ([], expected))
+            else:
+                break
+            expected -= pitch
+            need -= 1
+
+        expected = bands[-1][1] + pitch
+        while need > 0 and expected + pitch / 2 <= bottom + margin:
+            if hi < len(rows) and abs(row_center(rows[hi], expected) - expected) < pitch / 2:
+                bands.append((rows[hi], expected))
+                hi += 1
+            elif hi >= len(rows) or row_center(rows[hi], expected) > expected + pitch / 2:
+                bands.append(([], expected))
+            else:
+                break
+            expected += pitch
+            need -= 1
+
+        # Fill each band's missing columns from the nearest clean row's cell in
+        # that column, moved by the vertical distance between the two -- which
+        # also carries the page's slight rotation across, cell by cell.
+        valid = [c for c in slot_centers if c is not None]
+
+        def column_of(cell: _Cell) -> int | None:
+            slot = _nearest_slot(cell.x_center, valid, avg_col_width, self.slot_tolerance_ratio)
+            return None if slot is None else slot_centers.index(valid[slot])
+
+        table_id = next(c.cell.table_id for r in clean for c in r)
+        used_rows = {c.cell.row for r in rows for c in r}
+        fresh_row = max(used_rows, default=0) + 1
+        synthesized: list[_Cell] = []
+        completed: list[list[_Cell]] = []
+
+        # A column's normal cell size, from the clean rows. A detected box far
+        # smaller than that is not the printed cell -- on a real form B it was
+        # a closed loop of the handwriting itself (77x74 inside a 766-wide
+        # product cell) -- so it does not stand in for the column.
+        typical = {}
+        for col in range(self.table_col_count):
+            sizes = [(c.cell.bbox.w, c.cell.bbox.h) for r in clean for c in r if column_of(c) == col]
+            if sizes:
+                typical[col] = (float(np.median([w for w, _ in sizes])), float(np.median([h for _, h in sizes])))
+
+        def stands_for_column(cell: _Cell) -> bool:
+            col = column_of(cell)
+            if col is None or col not in typical:
+                return False
+            width, height = typical[col]
+            return cell.cell.bbox.w >= 0.5 * width and cell.cell.bbox.h >= 0.5 * height
+
+        for row, center in bands:
+            fragments = [c for c in row if not stands_for_column(c)]
+            row = [c for c in row if stands_for_column(c)]
+            center = row_center(row, center) if row else center
+            present = {column_of(cell) for cell in row} - {None}
+            for fragment in fragments:
+                fragment.role = CellRole.UNKNOWN
+            anchor = row or fragments
+            row_index = anchor[0].cell.row if anchor else fresh_row
+            if not anchor:
+                fresh_row += 1
+
+            new_cells = list(row)
+            for col in range(self.table_col_count):
+                if col in present or slot_centers[col] is None:
+                    continue
+                reference_row, reference_center = min(
+                    zip(clean, centers), key=lambda pair: abs(pair[1] - center)
+                )
+                reference = next((c for c in reference_row if column_of(c) == col), None)
+                if reference is None:
+                    continue
+                shift = int(round(center - reference_center))
+                box = reference.cell.bbox
+                cell = _Cell(
+                    TableCell(
+                        bbox=BoundingBox(x=box.x, y=box.y + shift, w=box.w, h=box.h),
+                        row=row_index,
+                        col=col,
+                        table_id=table_id,
+                    ),
+                    synthesized=True,
+                )
+                new_cells.append(cell)
+                synthesized.append(cell)
+
+            # One band is one item: every cell of it carries the same row, or
+            # the parser -- which groups an item by row -- would split it.
+            for cell in new_cells:
+                if cell.cell.row != row_index:
+                    cell.cell = replace(cell.cell, row=row_index)
+            new_cells.sort(key=lambda c: c.x_center)
+            completed.append(new_cells)
+
+        return completed, max(hi, lo + 1 + len(bands)), synthesized
 
     def _longest_full_run(self, rows: list[list[_Cell]]) -> tuple[int | None, int]:
         low, high = self.table_col_count, self.table_col_count + self.ragged_row_slack

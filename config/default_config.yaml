@@ -99,6 +99,10 @@ table_extraction:
     table_col_count: 6
     # Left to right, as the columns of this RTL form appear in pixel order.
     column_roles: [notes, line_total, unit_price, quantity, product_name, line_number]
+    # Rebuild item rows the extractor only partly found, from the measured row
+    # pitch and column edges -- one open contour must not drop a row and shift
+    # every row below it (measured: form B lost its first item that way).
+    complete_grid: true
     # Other printed forms. The page is labelled by the profile whose column count
     # fits its detected grid; form A (above) is the primary and the fallback.
     profiles:
@@ -111,6 +115,7 @@ table_extraction:
         printed_header_row: false
         footer_from_below: true
         ragged_row_slack: 1
+        complete_grid: true
 
 string_matching:
   algorithm: levenshtein

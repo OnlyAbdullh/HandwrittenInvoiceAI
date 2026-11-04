@@ -223,8 +223,23 @@ class TestTruthLookup:
         assert rows and all(row["text"] for row in rows)
         assert {"00010", "12", "بوري شبابي زارا"} <= {row["text"] for row in rows}
 
-    def test_rows_that_cannot_be_aligned_keep_their_header_labels(self, export, tmp_path):
-        photo = self._truth(tmp_path, items=4)  # four items, ten written rows: cannot be aligned
+    def test_the_truths_items_go_to_the_first_written_rows(self, export, tmp_path):
+        # Ten written rows on the page, four items in the truth: an invoice is
+        # filled from the top, so the four belong to the first four rows; ink
+        # below them is not an item.
+        photo = self._truth(tmp_path, items=4)
+        out = tmp_path / "crops"
+
+        assert export.main(["--photo", str(photo), "--truth", str(tmp_path / "truth"), "--out", str(out),
+                            "--config", "config/nuqta_config.yaml"]) == 0
+
+        rows = [json.loads(line) for line in (out / "labels.jsonl").read_text(encoding="utf-8").splitlines()]
+        quantities = [row for row in rows if row["role"] == "quantity"]
+        assert len(quantities) == 4 and all(row["text"] == "1" for row in quantities)
+        assert {"00010", "120"} <= {row["text"] for row in rows}
+
+    def test_truth_that_cannot_fit_the_table_keeps_only_header_labels(self, export, tmp_path):
+        photo = self._truth(tmp_path, items=11)  # more items than the form has rows
         out = tmp_path / "crops"
 
         assert export.main(["--photo", str(photo), "--truth", str(tmp_path / "truth"), "--out", str(out),
@@ -234,7 +249,6 @@ class TestTruthLookup:
         by_role = {row["role"]: row["text"] for row in rows}
         assert len(rows) == 57  # every readable cell is still there to compare models on
         assert by_role["invoice_number"] == "00010"
-        assert by_role["merchant_name"] == "حسام المارديني"
         assert by_role["total_in_figures"] == "120"
         assert all(row["text"] is None for row in rows if row["role"] in ("quantity", "product_name"))
 

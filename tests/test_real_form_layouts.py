@@ -142,3 +142,63 @@ class TestFormProfiles:
 
         assert not layout.with_role(CellRole.COLUMN_HEADER)
         assert len(layout.with_role(CellRole.QUANTITY)) >= 10
+
+
+class TestGridCompletion:
+    """Form B from the recorded real photo: the first item row's contours did not
+    close (two of its four boxes were found) and row 14 lost a box too. Without
+    completion the item table started at the second row and every row was
+    labelled one place off; the first item -- 16 x 13250 = 212000 -- was never read.
+    """
+
+    def test_the_first_item_row_is_read(self, two_form_classifier):
+        table, size = load_fixture("form_b_cells.json")
+        layout = two_form_classifier.classify(table, size)
+
+        # Row 1 of the paper, at y ~190 on the recorded page.
+        assert role_at(layout, 140, 200) is CellRole.UNIT_PRICE
+        assert role_at(layout, 350, 190) is CellRole.QUANTITY
+        assert role_at(layout, 800, 200) is CellRole.PRODUCT_NAME
+        assert role_at(layout, 1370, 200) is CellRole.LINE_TOTAL
+
+    def test_all_fifteen_rows_and_nothing_else(self, two_form_classifier):
+        table, size = load_fixture("form_b_cells.json")
+        layout = two_form_classifier.classify(table, size)
+
+        for role in (CellRole.UNIT_PRICE, CellRole.QUANTITY, CellRole.PRODUCT_NAME, CellRole.LINE_TOTAL):
+            assert len(layout.with_role(role)) == 15, role
+        # Inferred boxes are marked, so a render or a log can tell them apart.
+        assert 0 < sum(r.id.endswith("s") for r in layout.regions) <= 4
+        # The totals strip is still the totals strip, not a sixteenth item.
+        assert role_at(layout, 680, 1824) is CellRole.TOTAL_AMOUNT
+
+    def test_every_item_row_has_one_row_number(self, two_form_classifier):
+        table, size = load_fixture("form_b_cells.json")
+        layout = two_form_classifier.classify(table, size)
+
+        rows = {}
+        for region in layout.regions:
+            if region.role in (CellRole.UNIT_PRICE, CellRole.QUANTITY, CellRole.PRODUCT_NAME, CellRole.LINE_TOTAL):
+                rows.setdefault(region.row, []).append(region.role)
+        assert len(rows) == 15 and all(len(roles) == 4 for roles in rows.values())
+
+    def test_form_a_needs_nothing_inferred(self, two_form_classifier):
+        table, size = load_fixture("form_a_cells.json")
+        layout = two_form_classifier.classify(table, size)
+        assert not any(r.id.endswith("s") for r in layout.regions)
+
+    def test_the_vertical_shift_moves_item_boxes_only(self):
+        from config.loader import load_config
+
+        params = dict(load_config("config/qwen_config.yaml").table_extraction.classifier_params)
+        table, size = load_fixture("form_a_cells.json")
+        plain = BillLayoutClassifier(**params).classify(table, size)
+        shifted = BillLayoutClassifier(**{**params, "item_vertical_shift": 0.25}).classify(table, size)
+
+        before = {r.id: r.bbox for r in plain.regions}
+        for region in shifted.regions:
+            moved = region.bbox.y - before[region.id].y
+            if region.role in (CellRole.QUANTITY, CellRole.PRODUCT_NAME):
+                assert moved == round(0.25 * region.bbox.h)
+            elif region.role in (CellRole.INVOICE_NUMBER, CellRole.TOTAL_IN_FIGURES, CellRole.COLUMN_HEADER):
+                assert moved == 0

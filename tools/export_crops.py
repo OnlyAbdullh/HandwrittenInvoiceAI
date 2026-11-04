@@ -147,10 +147,25 @@ def export_labelled(page: PreparedPage, truth: InvoiceTruth, source: str, stem: 
     for region in page.layout.regions:
         if region.role in ITEM_ROLES and region.row is not None:
             rows.setdefault(region.row, {})[region.role] = region
-    filled_rows = [
-        row for _, row in sorted(rows.items())
-        if any(not page.is_blank(region) for region in row.values())
-    ]
+    # Top to bottom by position (a completed grid's inferred rows are not
+    # numbered in page order). An invoice is filled from the top, so the
+    # truth's N items belong to the first N rows -- provided each of them has
+    # writing in it. Ink lower down does not make a row an item: on a form
+    # whose writing sits on the row rules, letters and rule fragments spill
+    # into the blank rows below, and no ink measure tells them apart from
+    # faint writing (measured on both real forms).
+    ordered = [row for _, row in sorted(rows.items(), key=lambda kv: min(r.bbox.y for r in kv[1].values()))]
+    leading = ordered[: len(truth.items)]
+    if len(leading) == len(truth.items) and all(
+        any(not page.is_blank(region) for region in row.values()) for row in leading
+    ):
+        filled_rows = leading
+        extra = sum(any(not page.is_blank(r) for r in row.values()) for row in ordered[len(leading):])
+        if extra:
+            print(f"  {extra} row(s) below the {len(leading)} item(s) show ink (stray marks or rule fragments); "
+                  "not labelled.")
+    else:
+        filled_rows = [row for row in ordered if any(not page.is_blank(region) for region in row.values())]
 
     if len(filled_rows) != len(truth.items):
         # The item rows cannot be paired with the truth's items without risking

@@ -238,8 +238,15 @@ class InvoiceParser:
             if cell.role in _ITEM_ROLES:
                 rows.setdefault(cell.row, {})[cell.role] = cell
 
+        # Top to bottom by where the row actually is on the page. Row numbers
+        # come from different places -- the extractor's clustering, or a
+        # completed grid's inferred rows -- and only the position is the same
+        # thing for both.
+        def vertical_position(key: int) -> float:
+            return min(cell.bbox.y + cell.bbox.h / 2.0 for cell in rows[key].values())
+
         items: list[InvoiceLineItem] = []
-        for row_key in sorted(rows):
+        for row_key in sorted(rows, key=vertical_position):
             row = rows[row_key]
             item = self._item_from_roles(row, len(items), catalogs)
             if item is not None:

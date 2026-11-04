@@ -460,6 +460,19 @@ class TestLabelledLayout:
             ]
         return StructuredDocument(elements=elements)
 
+    def test_items_follow_the_page_not_the_row_numbers(self):
+        # A completed grid numbers an inferred row after every detected one;
+        # the item it holds is still the one highest on the page.
+        elements = []
+        for row, y, product in ((7, 300, "الأول"), (2, 360, "الثاني")):
+            elements += [
+                self.cell(f"p{row}", 860, y, product, CellRole.PRODUCT_NAME, row, 4),
+                self.cell(f"q{row}", 660, y, "2", CellRole.QUANTITY, row, 3),
+            ]
+        draft = InvoiceParser().parse(StructuredDocument(elements=elements), ocr())
+
+        assert [item.product_name.value for item in draft.line_items] == ["الأول", "الثاني"]
+
     def test_header_fields_come_from_the_labelled_boxes(self):
         draft = InvoiceParser().parse(self.document(), ocr())
 
