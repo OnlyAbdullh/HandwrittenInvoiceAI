@@ -381,6 +381,14 @@ exactly that to light blue ballpoint; see the measurement in `config/default_con
 When a handwritten field reads badly, compare the crop against the display image before
 touching prompts or models.
 
+**The outline perspective correction finds is not always the page.** On form B (white
+paper on a white cloth) the strongest outline is the table's printed border, and warping
+exactly to it cut away the invoice number, customer, date and the written total before
+anything was read; the "customer" then came back as the column captions. The step keeps a
+`margin` (default 0.15) of the photo around the outline. Form B's dotted-line header fields
+are declared as `unruled_fields` in its profile; re-record `tests/fixtures/form_*_cells.json`
+with `tools/record_layout_fixture.py` after changing any geometric step.
+
 **Deskew exists once.** There were three copies (the step, `grid_utils`,
 `temp/table_det.py`) and they disagreed. The survivor folds angles modulo 90 so vertical
 rules vote too, and expands the canvas so no corner is clipped.

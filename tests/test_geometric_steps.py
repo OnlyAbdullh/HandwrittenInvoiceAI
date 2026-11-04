@@ -31,12 +31,55 @@ class TestPerspectiveCorrection:
         photo = blank(1400, 1000, value=90)
         cv2.rectangle(photo, (70, 90), (930, 1310), (255, 255, 255), -1)
 
-        result = PerspectiveCorrectionStep().apply(context(photo))
+        result = PerspectiveCorrectionStep(margin=0.0).apply(context(photo))
         height, width = result.payload.image.shape[:2]
 
         # The desk is gone; roughly the page remains.
         assert 1150 < height < 1300
         assert 800 < width < 930
+
+    def test_keeps_what_lies_just_outside_the_detected_outline(self):
+        """The outline found is not always the page.
+
+        On form B -- white paper on a white cloth -- the paper's edge barely
+        shows, and the strongest outline is the table's printed border. Warping
+        exactly to it cut away the invoice number, the customer and the date
+        printed above the table, and most of the totals strip below it: no
+        reader could ever recover them. The margin keeps a band of the photo
+        around whatever outline was found.
+        """
+        photo = blank(1400, 1000, value=250)  # paper the same colour as the desk
+        cv2.rectangle(photo, (150, 300), (850, 1200), (0, 0, 0), 4)  # the table's border
+        cv2.putText(photo, "No 0001901", (200, 230), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0), 4)
+
+        cropped = PerspectiveCorrectionStep(margin=0.0).apply(context(photo.copy())).payload.image
+        kept = PerspectiveCorrectionStep(margin=0.15).apply(context(photo.copy())).payload.image
+
+        def ink_above_table(image, top):
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            return int((gray[: max(top - 10, 0)] < 128).sum())
+
+        assert ink_above_table(cropped, 0) == 0  # the number is gone
+        table_top = int(round(0.15 * 900))  # margin x the outline's height
+        assert ink_above_table(kept, table_top) > 500  # the number survives
+
+    def test_the_margin_is_measured_from_the_outline_and_recorded(self):
+        photo = blank(1400, 1000, value=90)
+        cv2.rectangle(photo, (70, 90), (930, 1310), (255, 255, 255), -1)
+
+        result = PerspectiveCorrectionStep(margin=0.1).apply(context(photo))
+        height, width = result.payload.image.shape[:2]
+        plain = PerspectiveCorrectionStep(margin=0.0).apply(context(photo.copy())).payload.image
+
+        assert (height, width) == (plain.shape[0] + 2 * round(0.1 * plain.shape[0]),
+                                   plain.shape[1] + 2 * round(0.1 * plain.shape[1]))
+        assert result.payload.metadata["perspective_correction"]["margin"] == 0.1
+
+    def test_an_out_of_range_margin_is_rejected(self):
+        import pytest
+
+        with pytest.raises(ValueError):
+            PerspectiveCorrectionStep(margin=0.8)
 
     def test_refuses_to_crop_to_a_blob_of_text(self):
         """The guard that matters most.

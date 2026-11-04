@@ -159,6 +159,11 @@ def _nearest_slot(
     return best_idx if best_dist <= tol else None
 
 
+# How many times its column's normal height a detected item cell may be before
+# it is taken to span rows rather than to be one row's cell.
+MAX_ROW_SPAN = 1.5
+
+
 @classifier_registry.register("bill_layout")
 class BillLayoutClassifier:
     name = "bill_layout"
@@ -177,6 +182,7 @@ class BillLayoutClassifier:
         footer_from_below: bool = False,
         complete_grid: bool = False,
         item_vertical_shift: float = 0.0,
+        unruled_fields: list[dict] | None = None,
         profile_name: str = "default",
         profiles: list[dict] | None = None,
     ):
@@ -232,11 +238,59 @@ class BillLayoutClassifier:
             raise ValueError(f"bill_layout: item_vertical_shift must be within [-0.5, 0.5], got {item_vertical_shift}.")
         self.item_vertical_shift = item_vertical_shift
 
+        # Fields a form prints on a dotted line rather than in a ruled box --
+        # form B's invoice number, customer and date sit above its table with
+        # nothing around them, so no extractor can ever find a box for them.
+        # Each is declared where it sits relative to the detected table outline:
+        # {role, x: [left, right], y: [top, bottom]}, x as fractions of the
+        # table's width from its left edge, y as fractions of its height from
+        # its top edge (negative is above the table). Measured on the form, the
+        # same way column_roles is; scale and position follow the table.
+        self.unruled_fields = [self._check_unruled(f) for f in (unruled_fields or [])]
+
         # Other printed forms this classifier recognises, each a full set of
         # the parameters above. The page is labelled by whichever profile -- this
         # one or an alternative -- fits its detected grid best. A second form is
         # a config entry, not a code change.
         self._alternatives = [BillLayoutClassifier(**dict(p)) for p in (profiles or [])]
+
+    @staticmethod
+    def _check_unruled(field: dict) -> tuple[CellRole, tuple[float, float], tuple[float, float]]:
+        try:
+            role = CellRole(field["role"])
+            x0, x1 = (float(v) for v in field["x"])
+            y0, y1 = (float(v) for v in field["y"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"bill_layout: unruled field {field!r} must be {{role, x: [left, right], y: [top, bottom]}}."
+            ) from exc
+        if set(field) - {"role", "x", "y"}:
+            raise ValueError(f"bill_layout: unruled field {field!r} has unknown keys.")
+        if not (x0 < x1 and y0 < y1):
+            raise ValueError(f"bill_layout: unruled field {field!r} needs left < right and top < bottom.")
+        return role, (x0, x1), (y0, y1)
+
+    def _unruled_regions(self, table_bbox: BoundingBox, table_id: str, image_size: tuple[int, int]) -> list[LayoutRegion]:
+        width, height = image_size
+        regions = []
+        for i, (role, (x0, x1), (y0, y1)) in enumerate(self.unruled_fields):
+            left = max(0, int(round(table_bbox.x + x0 * table_bbox.w)))
+            right = min(width, int(round(table_bbox.x + x1 * table_bbox.w)))
+            top = max(0, int(round(table_bbox.y + y0 * table_bbox.h)))
+            bottom = min(height, int(round(table_bbox.y + y1 * table_bbox.h)))
+            if right - left < 2 or bottom - top < 2:
+                continue  # off the page: the photo cut it off
+            zone = Zone.HEADER if y1 <= 0 else Zone.FOOTER if y0 >= 1 else Zone.TABLE
+            regions.append(LayoutRegion(
+                # "u": a region the form declares, not one the extractor found.
+                id=f"{table_id}:u{i}",
+                bbox=BoundingBox(x=left, y=top, w=right - left, h=bottom - top),
+                role=role,
+                zone=zone,
+                content_kind=content_kind_for(role),
+                table_id=table_id,
+            ))
+        return regions
 
     # ------------------------------------------------------------------
 
@@ -310,6 +364,7 @@ class BillLayoutClassifier:
             )
             for c in cells
         ]
+        regions += self._unruled_regions(structure.bbox, structure.table_id, image_size)
 
         return InvoiceLayout(
             regions=regions,
@@ -378,6 +433,22 @@ class BillLayoutClassifier:
                 rows, data_rows, first_data, table_rows, slot_centers, avg_col_width, top, bottom
             )
 
+        # A column's normal cell height, from the rows that hold exactly one
+        # cell per column. A box much taller than that spans more than one row,
+        # so it is not that row's cell: on form B, a box closed by the printed
+        # "Total" caption and the first item's rule (141x142 against cells 83
+        # high) was taken as a second line total for the first item.
+        clean = [r for r in table_rows if len(r) == self.table_col_count]
+        typical_height: dict[int, float] = {}
+        for col in range(self.table_col_count):
+            heights = [
+                c.cell.bbox.h for r in clean for c in r
+                if (s := _nearest_slot(c.x_center, valid, avg_col_width, self.slot_tolerance_ratio)) is not None
+                and slot_centers.index(valid[s]) == col
+            ]
+            if heights:
+                typical_height[col] = float(np.median(heights))
+
         for row, is_header in [(header_row, True)] + [(r, False) for r in data_rows]:
             for cell in row:
                 slot = _nearest_slot(
@@ -386,6 +457,12 @@ class BillLayoutClassifier:
                 if slot is None:
                     continue
                 col_index = slot_centers.index(valid[slot])
+                if (
+                    not is_header
+                    and col_index in typical_height
+                    and cell.cell.bbox.h > MAX_ROW_SPAN * typical_height[col_index]
+                ):
+                    continue  # spans rows: stays UNKNOWN
                 cell.role = (
                     CellRole.COLUMN_HEADER if is_header else self.column_roles[col_index]
                 )

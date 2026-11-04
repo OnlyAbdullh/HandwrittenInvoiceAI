@@ -6,7 +6,7 @@
 # test machine has no model weights.
 preprocessing:
   geometric_steps:
-    - {name: perspective_correction, enabled: true, params: {canny_low: 30, canny_high: 150}}
+    - {name: perspective_correction, enabled: true, params: {canny_low: 30, canny_high: 150, margin: 0.15}}
     - {name: deskew_hough, enabled: true, params: {hough_threshold: 100, min_line_length: 150, max_line_gap: 10, max_angle_deg: 20}}
 
   ocr_photometric_steps:

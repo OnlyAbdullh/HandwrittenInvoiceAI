@@ -9,7 +9,7 @@ preprocessing:
 
   # Runs once. Output is the single image shown on both sides of the UI.
   geometric_steps:
-    - {name: perspective_correction, enabled: true, params: {canny_low: 30, canny_high: 150}}
+    - {name: perspective_correction, enabled: true, params: {canny_low: 30, canny_high: 150, margin: 0.15}}
     - {name: deskew_hough, enabled: true, params: {hough_threshold: 100, min_line_length: 150, max_line_gap: 10, max_angle_deg: 20}}
 
   # Everything after illumination normalization is deliberately OFF: the Qwen
@@ -112,10 +112,22 @@ table_extraction:
         column_roles: [unit_price, quantity, product_name, line_total]
         header_roles: []
         footer_roles: [total_amount, label]
-        printed_header_row: false
-        footer_from_below: true
+        # The page is kept around the table (perspective_correction's margin),
+        # so the printed caption row and the totals strip are inside the
+        # detected outline: the caption row is a header, the totals strip the
+        # row after the items.
+        printed_header_row: true
+        footer_from_below: false
         ragged_row_slack: 1
         complete_grid: true
+        # Printed on dotted lines above the table, not in boxes, so no extractor
+        # finds them; declared relative to the table outline (fractions of its
+        # width from the left edge, of its height from the top; negative is
+        # above). Measured on bills/onlyone.
+        unruled_fields:
+          - {role: invoice_number, x: [0.04, 0.42], y: [-0.11, -0.05]}
+          - {role: merchant_name,  x: [0.38, 0.80], y: [-0.068, -0.002]}
+          - {role: invoice_date,   x: [-0.06, 0.26], y: [-0.068, -0.002]}
 
 string_matching:
   algorithm: levenshtein

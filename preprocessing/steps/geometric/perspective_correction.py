@@ -37,6 +37,7 @@ class PerspectiveCorrectionStep:
         canny_low: int = 30,
         canny_high: int = 150,
         min_area_ratio: float = 0.2,
+        margin: float = 0.15,
     ):
         self.canny_low = canny_low
         self.canny_high = canny_high
@@ -50,6 +51,10 @@ class PerspectiveCorrectionStep:
         # and nothing downstream can tell that it happened, because a cropped
         # image is still a perfectly valid image.
         self.min_area_ratio = min_area_ratio
+
+        if not 0.0 <= margin <= 0.5:
+            raise ValueError(f"perspective_correction margin must be in [0, 0.5], got {margin}.")
+        self.margin = margin
 
     def apply(self, ctx: PipelineContext) -> PipelineContext:
         image = ctx.payload.image
@@ -116,18 +121,28 @@ class PerspectiveCorrectionStep:
             }
             return ctx
 
+        pad_x = int(round(self.margin * max_width))
+        pad_y = int(round(self.margin * max_height))
         dst = np.array(
             [
-                [0, 0],
-                [max_width - 1, 0],
-                [max_width - 1, max_height - 1],
-                [0, max_height - 1],
+                [pad_x, pad_y],
+                [pad_x + max_width - 1, pad_y],
+                [pad_x + max_width - 1, pad_y + max_height - 1],
+                [pad_x, pad_y + max_height - 1],
             ],
             dtype="float32",
         )
 
         matrix = cv2.getPerspectiveTransform(ordered, dst)
-        warped = cv2.warpPerspective(image, matrix, (max_width, max_height))
+        warped = cv2.warpPerspective(
+            image,
+            matrix,
+            (max_width + 2 * pad_x, max_height + 2 * pad_y),
+            # Beyond the photo's own edge there is nothing; replicating its
+            # border keeps that from drawing a ruled line the grid finder
+            # would take for part of the form.
+            borderMode=cv2.BORDER_REPLICATE,
+        )
 
         debug_img = image.copy()
         cv2.drawContours(debug_img, [paper_contour], -1, (0, 255, 0), 2)
@@ -142,6 +157,7 @@ class PerspectiveCorrectionStep:
         ctx.payload.metadata["perspective_correction"] = {
             "corners": ordered.tolist(),
             "rect_angle": rect[2],
+            "margin": self.margin,
         }
         ctx.payload.debug_images.append(("edges", edges))
         ctx.payload.debug_images.append(("edges_dilated", edges_dilated))

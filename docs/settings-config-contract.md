@@ -36,6 +36,14 @@ An algorithm illegal for its step, or not implemented, is rejected with
 accepted ones. The table-detection branch's preprocessing is not exposed; the service
 default is used.
 
+`perspective_correction.params.margin` (0–0.5, default **0.15**) keeps a band of the
+photo around the outline the step found, as a fraction of that outline's size. Before
+it existed the step cropped exactly to the outline. On form B (white paper on a white
+cloth) the strongest outline is the table's printed border, so the invoice number,
+customer, date and most of the totals strip were cut away before anything was read.
+A request that omits `margin` gets the default. A settings page that sends `0`
+restores the old crop and loses those fields again.
+
 ## 3. Sections the request does not control
 
 `ocr`, `persistence` and `string_matching.dictionary_path` are **taken from the
@@ -80,3 +88,25 @@ top-level parameters are form A and the fallback. A profile sets `table_row_coun
 `table_col_count`, `column_roles`, `header_roles`, `footer_roles`, and the flags
 `printed_header_row` and `footer_from_below`. The profile used is recorded in the
 layout's `source`.
+
+Further profile parameters:
+
+- `complete_grid`: rebuild item rows the extractor only partly found.
+- `item_vertical_shift`: move item boxes by a fraction of their height. It is for
+  A/B tests and off by default.
+- `unruled_fields`: fields printed on a dotted line rather than in a box, declared
+  where they sit relative to the table outline, as
+  `{role, x: [left, right], y: [top, bottom]}`:
+  - `x` is a fraction of the table's width, from its left edge;
+  - `y` is a fraction of its height, from its top edge (negative is above the table).
+
+Form B's profile (`config/default_config.yaml`) declares its invoice number, customer
+and date this way. It also sets `printed_header_row: true` and
+`footer_from_below: false`, which are right once the page is kept around the table.
+
+**C# side:** the settings page sends its own `table_extraction` and perspective
+parameters, so the desktop app gets the form-B fixes only when its defaults match
+`config/default_config.yaml`. That means the perspective `margin`, and the form-B
+profile's `printed_header_row`, `footer_from_below` and `unruled_fields`. Update
+`PipelineCatalog.cs` (or wherever the app builds its default configuration)
+accordingly.

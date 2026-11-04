@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from core.domain.geometry import BoundingBox
-from core.domain.roles import CellRole
+from core.domain.roles import CellRole, ContentKind, Zone
 from core.domain.table import TableCell, TableExtractionResult, TableStructure
 from table_extraction.classifiers.bill_layout_classifier import BillLayoutClassifier
 
@@ -128,38 +128,60 @@ class TestFormProfiles:
         table, size = load_fixture("form_b_cells.json")
         layout = two_form_classifier.classify(table, size)
 
-        # Row 3 of the recorded grid: an item row (qty 192, price 5.70).
-        assert role_at(layout, 140, 400) is CellRole.UNIT_PRICE
-        assert role_at(layout, 350, 400) is CellRole.QUANTITY
-        assert role_at(layout, 800, 410) is CellRole.PRODUCT_NAME
-        assert role_at(layout, 1370, 410) is CellRole.LINE_TOTAL
-        # The handwritten sum, in the box below the table.
-        assert role_at(layout, 680, 1824) is CellRole.TOTAL_AMOUNT
+        # The second item row (6 x 200 = 1200) on the recorded page.
+        assert role_at(layout, 313, 463) is CellRole.UNIT_PRICE
+        assert role_at(layout, 478, 465) is CellRole.QUANTITY
+        assert role_at(layout, 859, 471) is CellRole.PRODUCT_NAME
+        assert role_at(layout, 1267, 479) is CellRole.LINE_TOTAL
+        # The handwritten sum: the wide box of the totals strip ("المجموع"),
+        # not the small empty box beside it.
+        assert role_at(layout, 680, 1650) is CellRole.TOTAL_AMOUNT
 
-    def test_the_first_detected_row_of_form_b_is_an_item_not_a_header(self, two_form_classifier):
+    def test_the_printed_caption_row_of_form_b_is_a_header_not_an_item(self, two_form_classifier):
+        """With the page kept around the table, the caption row (Price |
+        Quantity | Description | Total) is inside the detected outline."""
         table, size = load_fixture("form_b_cells.json")
         layout = two_form_classifier.classify(table, size)
 
-        assert not layout.with_role(CellRole.COLUMN_HEADER)
-        assert len(layout.with_role(CellRole.QUANTITY)) >= 10
+        assert len(layout.with_role(CellRole.COLUMN_HEADER)) >= 4
+        assert role_at(layout, 316, 290) is CellRole.COLUMN_HEADER
+
+    def test_the_unruled_header_fields_are_read_from_where_the_form_prints_them(self, two_form_classifier):
+        """Invoice number, customer and date sit on dotted lines above the
+        table, with no box around them. They were never read at all."""
+        table, size = load_fixture("form_b_cells.json")
+        layout = two_form_classifier.classify(table, size)
+
+        number, customer, date = (layout.with_role(r) for r in (
+            CellRole.INVOICE_NUMBER, CellRole.MERCHANT_NAME, CellRole.INVOICE_DATE))
+        assert len(number) == len(customer) == len(date) == 1
+        table_top = layout.table_bbox.y
+        for region in (number[0], customer[0], date[0]):
+            assert region.zone is Zone.HEADER
+            assert region.bbox.y + region.bbox.h <= table_top  # entirely above the table
+        # Right to left as printed: customer on the right, date on the left.
+        assert customer[0].bbox.x > date[0].bbox.x + date[0].bbox.w - 1
+        assert date[0].content_kind is ContentKind.DATE
+        assert number[0].content_kind is ContentKind.CODE
 
 
 class TestGridCompletion:
-    """Form B from the recorded real photo: the first item row's contours did not
-    close (two of its four boxes were found) and row 14 lost a box too. Without
-    completion the item table started at the second row and every row was
-    labelled one place off; the first item -- 16 x 13250 = 212000 -- was never read.
+    """Form B from the recorded real photo. Its first item row's contours do
+    not all close (the price box of item 1 is found merged with the caption
+    above it). Without completion the item table started at the second row and
+    every row was labelled one place off; the first item -- 16 x 13250 = 212000
+    -- was never read.
     """
 
     def test_the_first_item_row_is_read(self, two_form_classifier):
         table, size = load_fixture("form_b_cells.json")
         layout = two_form_classifier.classify(table, size)
 
-        # Row 1 of the paper, at y ~190 on the recorded page.
-        assert role_at(layout, 140, 200) is CellRole.UNIT_PRICE
-        assert role_at(layout, 350, 190) is CellRole.QUANTITY
-        assert role_at(layout, 800, 200) is CellRole.PRODUCT_NAME
-        assert role_at(layout, 1370, 200) is CellRole.LINE_TOTAL
+        # Row 1 of the paper, at y ~385 on the recorded page.
+        assert role_at(layout, 313, 385) is CellRole.UNIT_PRICE
+        assert role_at(layout, 478, 382) is CellRole.QUANTITY
+        assert role_at(layout, 859, 389) is CellRole.PRODUCT_NAME
+        assert role_at(layout, 1200, 400) is CellRole.LINE_TOTAL
 
     def test_all_fifteen_rows_and_nothing_else(self, two_form_classifier):
         table, size = load_fixture("form_b_cells.json")
@@ -170,7 +192,7 @@ class TestGridCompletion:
         # Inferred boxes are marked, so a render or a log can tell them apart.
         assert 0 < sum(r.id.endswith("s") for r in layout.regions) <= 4
         # The totals strip is still the totals strip, not a sixteenth item.
-        assert role_at(layout, 680, 1824) is CellRole.TOTAL_AMOUNT
+        assert role_at(layout, 680, 1650) is CellRole.TOTAL_AMOUNT
 
     def test_every_item_row_has_one_row_number(self, two_form_classifier):
         table, size = load_fixture("form_b_cells.json")
@@ -181,6 +203,15 @@ class TestGridCompletion:
             if region.role in (CellRole.UNIT_PRICE, CellRole.QUANTITY, CellRole.PRODUCT_NAME, CellRole.LINE_TOTAL):
                 rows.setdefault(region.row, []).append(region.role)
         assert len(rows) == 15 and all(len(roles) == 4 for roles in rows.values())
+
+    def test_a_box_spanning_rows_is_not_an_item_cell(self, two_form_classifier):
+        """A 141x142 box closed between the "Total" caption and the first item's
+        rule was labelled a second line total for item 1."""
+        table, size = load_fixture("form_b_cells.json")
+        layout = two_form_classifier.classify(table, size)
+
+        heights = sorted(r.bbox.h for r in layout.with_role(CellRole.LINE_TOTAL))
+        assert heights[-1] < 1.5 * heights[len(heights) // 2]
 
     def test_form_a_needs_nothing_inferred(self, two_form_classifier):
         table, size = load_fixture("form_a_cells.json")
@@ -202,3 +233,24 @@ class TestGridCompletion:
                 assert moved == round(0.25 * region.bbox.h)
             elif region.role in (CellRole.INVOICE_NUMBER, CellRole.TOTAL_IN_FIGURES, CellRole.COLUMN_HEADER):
                 assert moved == 0
+
+
+class TestUnruledFieldConfig:
+    def test_a_declared_field_outside_the_photo_is_dropped_not_invented(self):
+        table, size = load_fixture("form_b_cells.json")
+        layout = BillLayoutClassifier(
+            table_row_count=15, table_col_count=4,
+            column_roles=["unit_price", "quantity", "product_name", "line_total"],
+            unruled_fields=[{"role": "invoice_date", "x": [0.1, 0.2], "y": [-5.0, -4.0]}],
+        ).classify(table, size)
+        assert not layout.with_role(CellRole.INVOICE_DATE)
+
+    @pytest.mark.parametrize("field", [
+        {"role": "invoice_date", "x": [0.3, 0.2], "y": [-0.1, 0.0]},
+        {"role": "no_such_role", "x": [0.1, 0.2], "y": [-0.1, 0.0]},
+        {"role": "invoice_date", "x": [0.1, 0.2]},
+        {"role": "invoice_date", "x": [0.1, 0.2], "y": [-0.1, 0.0], "colour": "red"},
+    ])
+    def test_a_malformed_field_fails_when_the_config_loads(self, field):
+        with pytest.raises(ValueError):
+            BillLayoutClassifier(unruled_fields=[field])
