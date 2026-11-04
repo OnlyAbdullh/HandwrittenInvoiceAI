@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 
 from ocr.recognizers import echo_recognizer  # noqa: F401  (no dependencies)
+from ocr.recognizers import routed_recognizer  # noqa: F401  (builds others; needs nothing itself)
 
 logger = logging.getLogger(__name__)
 
