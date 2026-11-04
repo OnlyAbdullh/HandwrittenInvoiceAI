@@ -359,6 +359,35 @@ def parse_date(text: str | None, plausible_only: bool = False) -> date | None:
     return dates.pop() if len(dates) == 1 else None
 
 
+def repair_year(text: str | None) -> date | None:
+    """A date whose year was misread by one digit, when only one fix fits.
+
+    The models read the handwritten year "٢٠٢٦" as "٣٠٢٦", "١٠٢٦" and "٢٠٤٦" on
+    the real invoices: one digit wrong, the rest right. When the reading parses
+    to an implausible year, every single-digit change of that year is tried,
+    and the date is returned only if exactly one lands in the plausible range.
+    "٣٠٢٦" -> 2026 (no other digit change is plausible); "٢٠٤٦" -> None,
+    because 2006, 2016 and 2026 all are. The caller must flag the result for
+    review: it is a correction, not a reading.
+    """
+    found = parse_date(text)
+    if found is None or is_plausible_date(found):
+        return None
+    year = f"{found.year:04d}"
+    fixes = set()
+    for i, digit in enumerate(year):
+        for replacement in "0123456789":
+            if replacement == digit:
+                continue
+            try:
+                candidate = found.replace(year=int(year[:i] + replacement + year[i + 1:]))
+            except ValueError:
+                continue  # 29 February in a non-leap year
+            if is_plausible_date(candidate):
+                fixes.add(candidate)
+    return fixes.pop() if len(fixes) == 1 else None
+
+
 def _parse_date_text(cleaned: str, plausible_only: bool) -> date | None:
     for pattern, order in _DATE_PATTERNS:
         match = pattern.search(cleaned)

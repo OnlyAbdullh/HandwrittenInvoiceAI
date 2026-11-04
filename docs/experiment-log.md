@@ -374,6 +374,44 @@ model.
 - **Invoice number:** a printed number sign (`№`, read as `N/`) is stripped:
   `N/ 0001901` → `0001901`.
 
+### 2026-11-04 · Number repair measured; the invoice total as a fourth equation
+- **Laptop result, `default_config.yaml`:** exactly what the replay predicted.
+  - **Numbers 20/24** (from 12/24);
+  - **header 6/9** (both invoice numbers right now);
+  - phantom rows **0** (from 11);
+  - 22 model calls per invoice, **14.7 s per invoice**, 3.75 GB peak RAM.
+- **Left:** both totals, the `sahror` year (`٣٠٢٦`), and row 2 on both invoices
+  (6 × 200 = 1200 read as `٥٠`/`١٢٠` and as `٢٠١`/`١٢٠٦`).
+- **Change (cloud, laptop readings replayed):**
+  - **The invoice total as a fourth equation.** Each row that does not check out
+    is tried as *the* wrong one, with the others at their repaired values. Its
+    line total must agree with its own reading (as misread in the known ways)
+    *and* make the invoice total agree with the total's reading (≤ 2 digits).
+    Only a unique answer is written.
+    - `sahror`: row 2 → 6 × 200 = 1200, and the total `٢١٤٨٢٠٥` → 214812.05.
+    - `onlyone`: its total reading `٥١٤٨١٤٠٠` is too far from any sum, so
+      nothing changes. Its row 2 (`٢٠١ × 6 = ١٢٠٦`) multiplies out as misread;
+      no check here can see it.
+  - **Year repair.** An implausible year is fixed only when exactly one
+    single-digit change is plausible: `٣٠٢٦` → 2026, `١٠٢٦` → 2026. `٢٠٤٦` stays
+    null (2006, 2016 and 2026 all fit).
+  - **Corrections are visible to the app.** There is no warnings array on the
+    wire (`docs/api-contract.md`), so every corrected or derived value now
+    carries `ocr_confidence` 0.5, below the 0.75 review threshold:
+    - digit corrections, the row-from-total solve and the total correction;
+    - the year repair;
+    - a cell derived from the other two in its row.
+
+    A separator-only fix keeps the model's confidence. Before this, a
+    corrected value went out at the model's own (often high) confidence.
+  - **Bugs found on the way, fixed:**
+    - a value derived earlier in the stage was later treated as a reading;
+    - a one-cell repair accepted a row that only multiplied out after rounding;
+    - "taken as read" ignored a legible separator (`٥,٩٥` argued for 595).
+- **Replay of the laptop readings:** `sahror` **12/12** numbers and the total
+  right; `onlyone` 10/12. Expected on the laptop: numbers 22/24, header 8/9
+  (the onlyone total remains). Perfect readings still give 100%.
+
 ### Pending: needs the laptop
 - Re-export both invoices at the working resolution (`export_crops.py` should
   now print `read at ...x2000` and 41 labelled cells), re-run the benchmark on

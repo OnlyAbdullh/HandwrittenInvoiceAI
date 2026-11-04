@@ -38,6 +38,7 @@ from core.domain.invoice import (
     InvoiceLineItem,
     InvoiceWarning,
     WarningCodes,
+    mark_corrected,
 )
 from string_matching.normalization import digit_sequence, fold_digits, fold_latin_lookalikes
 
@@ -358,25 +359,114 @@ def reconcile(draft: InvoiceDraft) -> InvoiceDraft:
     # derives makes its row multiply out by construction, which verifies
     # nothing, so only these rows can vouch for the invoice total.
     fully_read = [all(_has_reading(f) for f in (i.quantity, i.unit_price, i.total_price)) for i in draft.line_items]
+    # What was *read*, before anything here writes a value: a cell this stage
+    # derives must never later pass for a reading.
+    readings = [{name: _raw_reading(getattr(i, name)) for name in ("quantity", "unit_price", "total_price")}
+                for i in draft.line_items]
     draft.warnings = [w for w in draft.warnings if not _is_row_correction(w)]
-    corrected = False
-    for item in draft.line_items:
+    corrected_rows: set[int] = set()
+    for index, item in enumerate(draft.line_items):
         for name, raw, value in _reconcile_row(item):
-            corrected = True
-            # The digits changed, not only the separator: the row now adds up,
-            # so nothing else would ask anyone to look at it.
-            draft.warnings.append(InvoiceWarning(
-                code=WarningCodes.MANUAL_REVIEW_REQUIRED,
-                field=f"line_items[{item.row_index}].{name}",
-                message=(f"Row {item.row_index + 1}: {name} was read as '{raw}' and corrected to {value} "
-                         "so that quantity x unit price = line total. Confirm it against the paper."),
-            ))
+            corrected_rows.add(index)
+            _flag_cell(draft, item, name, raw, value, "so that quantity x unit price = line total")
 
     # A row whose digits were just corrected adds up by construction too.
-    _reconcile_total(draft, rows_verified=all(fully_read) and not corrected)
+    verified = [
+        fully_read[i] and i not in corrected_rows and _row_multiplies_out(item)
+        for i, item in enumerate(draft.line_items)
+    ]
+    _reconcile_total(draft, rows_verified=all(verified))
+    unverified = [i for i, ok in enumerate(verified) if not ok]
+    if unverified:
+        _solve_row_from_total(draft, unverified, readings)
     _refresh_arithmetic_warnings(draft)
     _refresh_total_warning(draft)
     return draft
+
+
+def _flag_cell(draft: InvoiceDraft, item: InvoiceLineItem, name: str, raw: str, value: float, why: str) -> None:
+    """A cell whose digits this stage changed: lower its confidence below the
+    review threshold (the app's only signal) and record why."""
+    mark_corrected(getattr(item, name))
+    field = f"line_items[{item.row_index}].{name}"
+    draft.warnings = [w for w in draft.warnings if not (_is_row_correction(w) and w.field == field)]
+    draft.warnings.append(InvoiceWarning(
+        code=WarningCodes.MANUAL_REVIEW_REQUIRED,
+        field=field,
+        message=f"Row {item.row_index + 1}: {name} was read as '{raw}' and corrected to {value} {why}. "
+                "Confirm it against the paper.",
+    ))
+
+
+def _solve_row_from_total(draft: InvoiceDraft, unverified: list[int], readings: list[dict[str, str]]) -> None:
+    """The invoice total as one more equation, for a row that does not check out.
+
+    Each row that is not verified (not read whole, not multiplying out, or
+    multiplying out only because this stage changed its digits) is tried as
+    *the* wrong one, with every other row at its current value. Its line total
+    must then make the invoice total -- and agree with *two* independent
+    readings at once: its own cell's reading (as `handwriting_candidates` allows
+    it to have been misread) and the invoice total's reading (within
+    MAX_TOTAL_EDITS digits). The unit price follows as line total / quantity and
+    must be a two-decimal amount.
+
+    Only one answer across all the tries is accepted, and it is flagged as
+    corrected. On bills/sahror the row "6 x ٥٠ = ١٢٠" (6 x 200 = 1200 on the
+    paper) and the total "٢١٤٨٢٠٥" (214812.05) settle each other this way and
+    nothing else does.
+    """
+    total = draft.header.total_amount
+    total_raw = total.raw if total.raw is not None else total.value
+    total_digits = digit_sequence("" if total_raw is None else str(total_raw))
+    if not total_digits or any(not isinstance(row.total_price.value, (int, float)) for row in draft.line_items):
+        return
+    current_sum = round(sum(float(row.total_price.value) for row in draft.line_items), 2)
+    if isinstance(total.value, (int, float)) and abs(current_sum - float(total.value)) <= TOLERANCE:
+        return  # the invoice already adds up; nothing to solve
+
+    answers = set()
+    for index in unverified:
+        item = draft.line_items[index]
+        quantity = item.quantity.value
+        read_total = readings[index]["total_price"]
+        if not isinstance(quantity, (int, float)) or quantity <= 0 or not digit_sequence(read_total):
+            continue
+        others_sum = round(current_sum - float(item.total_price.value), 2)
+        read_cell = _Cell(name="total_price", raw=read_total, digits=digit_sequence(read_total), value=None)
+        for line_total in _pool(read_cell, integral=False):
+            price = round(line_total / float(quantity), 2)
+            if line_total <= 0 or abs(price * float(quantity) - line_total) > TOLERANCE:
+                continue
+            invoice_total = round(others_sum + line_total, 2)
+            edits = _levenshtein(_digits_of(invoice_total), total_digits)
+            if edits <= MAX_TOTAL_EDITS and edits / max(len(total_digits), 1) <= 0.25:
+                answers.add((index, price, round(line_total, 2), invoice_total))
+    if len(answers) != 1:
+        return
+
+    index, price, line_total, invoice_total = answers.pop()
+    item = draft.line_items[index]
+    why = f"so that the invoice adds up to {invoice_total} (total read as '{total_raw}')"
+    for name, value in (("unit_price", price), ("total_price", line_total)):
+        read = readings[index][name]
+        if not _is_literal(value, read):
+            _flag_cell(draft, item, name, read or "(nothing)", value, why)
+        _write_back(item, name, value)
+    if not _is_literal(invoice_total, str(total_raw)):
+        mark_corrected(total)
+        draft.warnings.append(InvoiceWarning(
+            code=WarningCodes.MANUAL_REVIEW_REQUIRED,
+            field="total_amount",
+            message=(f"The total was read as '{total_raw}'; with row {item.row_index + 1} solved from it, "
+                     f"the invoice adds up to {invoice_total}. Confirm it against the paper."),
+        ))
+    total.value = invoice_total
+    item.arithmetic_ok = _row_is_consistent(item)
+
+
+def _raw_reading(field) -> str:
+    raw = field.raw if field.raw is not None else field.value
+    return "" if raw is None else str(raw)
 
 
 def _is_row_correction(warning: InvoiceWarning) -> bool:
@@ -431,6 +521,7 @@ def _reconcile_total(draft: InvoiceDraft, rows_verified: bool = False) -> None:
     if 0 < edits <= MAX_TOTAL_EDITS and edits / max(len(expected), len(digits)) <= 0.25:
         read_as = total.value
         total.value = items_sum
+        mark_corrected(total)
         draft.warnings.append(
             InvoiceWarning(
                 code=WarningCodes.MANUAL_REVIEW_REQUIRED,
@@ -569,16 +660,18 @@ def _reconcile_complete_row(item, cells: dict[str, _Cell], pools) -> list[tuple[
     # so the read total may carry a stray digit the multiplication does not.
     changed = []
     for name, value in (("unit_price", price), ("quantity", quantity), ("total_price", round(price * quantity, 2))):
-        if _digits_of(value) != cells[name].digits and not _only_trailing_zeros_added(value, cells[name].raw):
+        if not _is_literal(value, cells[name].raw):
             changed.append((name, cells[name].raw, value))
         _write_back(item, name, value)
     return changed
 
 
-def _only_trailing_zeros_added(value: float, raw: str) -> bool:
-    """A reading ending in dots ("212...") whose value only spells out those
-    dots as zeros has not been corrected, only read."""
-    return bool(re.search(r"[.…]\s*$", raw or "")) and _digits_of(value) in dot_run_candidates(raw)
+def _is_literal(value: float, raw: str | None) -> bool:
+    """Whether `value` is what was written, read with its separator anywhere
+    (or its dot-run spelled out as zeros) -- i.e. not a correction. "517.60"
+    is 517.6, "212..." is 212000, "51765" is 517.65; "٥٠٧" is not 5.7."""
+    sequences = dot_run_candidates(raw) or []
+    return any(abs(value - candidate) <= 1e-9 for seq in sequences for candidate in decimal_candidates(seq))
 
 
 def _best_scaled(combinations, cells: dict[str, _Cell]):
@@ -659,11 +752,11 @@ def _repair_least_trusted_cell(item, cells: dict[str, _Cell], pools) -> list[tup
                         continue
                     if value <= 0 or not _explains_reading(value, cell.digits):
                         continue
+                    triple = {**given, suspect: value}
+                    if abs(triple["unit_price"] * triple["quantity"] - triple["total_price"]) > TOLERANCE:
+                        continue  # rounding made it look consistent; it is not
                     distance = _levenshtein(_digits_of(value), cell.digits)
-                    literal = sum(
-                        cells[name].digits and abs(v - float(cells[name].digits)) <= TOLERANCE
-                        for name, v in given.items()
-                    )
+                    literal = sum(_as_read_vote(v, cells[name]) for name, v in given.items())
                     scored.append(((distance, -literal), suspect, value, given))
 
     if not scored:
@@ -677,10 +770,23 @@ def _repair_least_trusted_cell(item, cells: dict[str, _Cell], pools) -> list[tup
     suspect, value, given = next(iter(best))
     changed = []
     for name, new in (*given, (suspect, value)):
-        if _digits_of(new) != cells[name].digits:
+        if not _is_literal(new, cells[name].raw):
             changed.append((name, cells[name].raw, new))
         _write_back(item, name, new)
     return changed
+
+
+def _as_read_vote(value: float, cell: _Cell) -> int:
+    """+1 if `value` is the cell as read, -1 if the reading says otherwise.
+
+    A legible separator is the reading ("٥,٩٥" is 5.95 and argues against
+    595); without one, only the bare digits count. The same evidence
+    `_best_scaled` weighs.
+    """
+    agrees = _matches_separator(value, cell.raw)
+    if agrees is not None:
+        return 1 if agrees else -1
+    return int(bool(cell.digits) and abs(value - float(cell.digits)) <= TOLERANCE)
 
 
 def _digits_of(value: float) -> str:
@@ -722,6 +828,8 @@ def _derive_missing_cell(item, cells: dict[str, _Cell], pools) -> None:
 
     if len(options) == 1:
         _write_back(item, missing, options.pop())
+        # Derived, not read: present, but for the review screen to confirm.
+        mark_corrected(getattr(item, missing))
 
 
 def _purity(cell: _Cell) -> float:

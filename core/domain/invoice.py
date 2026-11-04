@@ -188,6 +188,21 @@ class InvoiceDraft:
         }
 
 
+# The ocr_confidence a value carries when this service *corrected* it -- changed
+# its digits from what was read -- rather than read it. There is no warnings
+# array on the wire (docs/api-contract.md), so confidence is the one signal the
+# desktop app gets: it is kept below the review threshold so a correction is
+# always looked at. Not 0, which means "unknown / rejected".
+CORRECTED_VALUE_CONFIDENCE = 0.5
+assert CORRECTED_VALUE_CONFIDENCE < REVIEW_CONFIDENCE_THRESHOLD
+
+
+def mark_corrected(value: ExtractedValue) -> None:
+    """Flag a value this service corrected, for the review screen."""
+    value.confidence = min(float(value.confidence or 0.0), CORRECTED_VALUE_CONFIDENCE) or CORRECTED_VALUE_CONFIDENCE
+    value.requires_manual_review = True
+
+
 class WarningCodes:
     LOW_CONFIDENCE_FIELD = "LOW_CONFIDENCE_FIELD"
     ARITHMETIC_MISMATCH = "ARITHMETIC_MISMATCH"

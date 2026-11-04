@@ -20,6 +20,7 @@ These are the differences from the previous revision of the contract.
 | 3 | The `ocr` and `persistence` sections, and `string_matching.dictionary_path`, of the `config` part are **ignored**. What runs and where files go is decided by the machine's own configuration. They are still accepted so old clients keep working. | Stop sending them, or leave as is. |
 | 4 | Requests that carry an `Origin` header are refused with `403 FORBIDDEN_ORIGIN`. If `INVOICE_AI_API_TOKEN` is set, every endpoint except `/health` requires header `X-Invoice-AI-Token` (`401 UNAUTHORIZED`). | `HttpClient` sends no `Origin` by default. Generate a token per install and pass it to the service when launching it. |
 | 5 | `.heic`, `.heif` and `.pdf` uploads are accepted when the optional packages are installed (`requirements-optional.txt`); otherwise `400 UNSUPPORTED_FORMAT` naming the package. PDF reads the first page; `source.page_count` reports the total. | Optionally offer these file types. |
+| 7 | A value the service **corrected** rather than read carries `ocr_confidence` **0.5**, below the 0.75 review threshold. Corrections cover:<br>• an amount whose digits were changed to satisfy `price × qty = total` or the invoice total;<br>• a cell derived from the other two in its row;<br>• the invoice total corrected to the line sum;<br>• a date whose year was one digit off with only one plausible fix (`٣٠٢٦` → 2026).<br>The value is the service's best answer; the confidence says "check this". There is no warnings array on the wire, so this is the only signal. A value only re-separated (`51765` → 517.65) keeps the model's confidence. | Nothing new: fields below 0.75 are already highlighted for review. Do not auto-accept on the value alone. |
 | 6 | `422 INVALID_CONFIGURATION` is returned when the configuration cannot be built into a pipeline (unknown component, unknown parameter, unimplemented algorithm). `503 ENGINE_NOT_READY` now means only "model files or dependencies missing, or still loading". | — |
 
 ## `GET /health`
@@ -91,8 +92,9 @@ Exactly these keys:
 Two field shapes:
 
 * **Value field** — `value`, `ocr_confidence`, `bounding_box`. `value` is `null` when
-  unread. `date` is ISO-8601 or `null` (a year outside 2000..next year is `null`, not
-  itself). Amounts are JSON numbers.
+  unread. `date` is ISO-8601 or `null`. A year outside 2000..next year is `null`, not
+  itself, unless exactly one single-digit change of it is plausible; then that date is
+  returned at `ocr_confidence` 0.5 (change 7). Amounts are JSON numbers.
 * **Matched field** — `customer_name`, `city`, `product_name`. **No `value`**:
   `original_value` is always the raw OCR text, and `results` is the ranked catalog
   entries (best first, scores 0–1). Choosing one — against the 0.75 threshold — is the

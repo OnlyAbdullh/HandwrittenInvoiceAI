@@ -132,7 +132,12 @@ every other module knows only its own interface. `PipelineOrchestrator.run()`:
    - a run of dot-zeros counted short.
 
    A reading without a separator never gets an all-zero decimal part. A correction that
-   changes digits flags that cell `MANUAL_REVIEW_REQUIRED`. It runs on the parsed draft rather than
+   changes digits flags that cell `MANUAL_REVIEW_REQUIRED`. When rows still fail, the
+   invoice total is a fourth equation (`_solve_row_from_total`): one row's line total
+   must agree with both its own reading and the total's reading, and only a unique
+   answer is written. **There is no warnings array on the wire**, so every corrected
+   or derived value also gets `ocr_confidence` 0.5 (`mark_corrected`,
+   `core/domain/invoice.py`). That keeps it below the app's 0.75 review threshold. It runs on the parsed draft rather than
    inside the parser because it is a property of the three numbers **together**.
 7. Assembles a `PipelineResult` (with a full `config_snapshot` for audit/reproducibility),
    persists it via `ResultStore`, hands it to `output_formatter.format()`.

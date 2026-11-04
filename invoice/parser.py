@@ -32,6 +32,7 @@ from core.domain.invoice import (
     InvoiceLineItem,
     InvoiceWarning,
     WarningCodes,
+    mark_corrected,
 )
 from core.domain.roles import CellRole
 from core.domain.text_lines import TextLine, Word
@@ -44,6 +45,7 @@ from string_matching.normalization import (
     normalize_text,
     parse_date,
     parse_number_strict,
+    repair_year,
 )
 
 # Label keywords, Arabic and English. Matched against normalized text, so they
@@ -203,6 +205,13 @@ class InvoiceParser:
 
         if role is CellRole.INVOICE_DATE:
             parsed = parse_date(text, plausible_only=True)
+            repaired = None if parsed else repair_year(text)
+            if repaired is not None:
+                # Offered so the field is not empty, flagged so it is checked:
+                # see _flag_corrected_date.
+                value = ExtractedValue(value=format_date(repaired), confidence=confidence, raw=text, bbox=bbox)
+                mark_corrected(value)
+                return value
             return ExtractedValue(
                 value=format_date(parsed) if parsed else text,
                 confidence=confidence,
@@ -1064,6 +1073,17 @@ def _add_warnings(draft: InvoiceDraft) -> None:
             )
 
     date_value = draft.header.invoice_date
+    if date_value.requires_manual_review and date_value.raw is not None and date_value.value is not None:
+        draft.warnings.append(
+            InvoiceWarning(
+                code=WarningCodes.MANUAL_REVIEW_REQUIRED,
+                field="invoice_date",
+                message=(
+                    f"The date was read as '{date_value.raw}', whose year is not plausible; exactly one "
+                    f"single-digit change of the year is, giving {date_value.value}. Confirm it against the paper."
+                ),
+            )
+        )
     if (
         isinstance(date_value.value, str)
         and parse_date(date_value.value, plausible_only=True) is None

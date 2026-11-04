@@ -237,11 +237,20 @@ class TestHeaderTotalFromVerifiedRows:
         assert draft.header.total_amount.value == 51.0
         assert WarningCodes.TOTAL_MISMATCH in [w.code for w in draft.warnings]
 
-    def test_not_when_a_row_is_unverified(self):
+    def test_not_when_a_line_total_was_never_read(self):
         draft = self._draft("۴۱۴۸۱۲۰۵")
-        draft.line_items[1].quantity = ExtractedValue()  # 1200 is no longer confirmed by its row
+        draft.line_items[1].total_price = ExtractedValue()  # derived from 6 x 200, never read
         reconcile(draft)
         assert draft.header.total_amount.value == 41481205.0
+
+    def test_a_row_short_of_its_quantity_still_has_a_read_line_total(self):
+        # Only the quantity is missing; every line total was read, so the sum
+        # the total is checked against is still made of readings.
+        draft = self._draft("۴۱۴۸۱۲۰۵")
+        draft.line_items[1].quantity = ExtractedValue()
+        reconcile(draft)
+        assert draft.header.total_amount.value == 214812.05
+        assert draft.header.total_amount.confidence <= 0.5
 
     def test_a_stale_total_mismatch_is_withdrawn(self):
         from core.domain.invoice import InvoiceWarning
@@ -329,8 +338,70 @@ def test_a_digit_corrected_row_does_not_vouch_for_the_invoice_total():
     from string_matching.normalization import normalize_price
 
     rows = TestHandwrittenMisreads._row
-    draft = InvoiceDraft(line_items=[rows(("16", "13250", "212000")), rows(("87", "٥٠٩٥", "517.65"))])
+    # Row 2's line total was itself corrected (517.60 -> 517.65): it is no
+    # reading, so the total one digit off the sum is not corrected to it.
+    draft = InvoiceDraft(line_items=[rows(("16", "13250", "212000")), rows(("87", "٥,٩٥", "٥١٧,٦٠"))])
     draft.header.total_amount = ExtractedValue(value=normalize_price("٢١٢٥١٧٠٥"), raw="٢١٢٥١٧٠٥")  # 212517.65, one digit off
     reconcile(draft)
-    assert draft.line_items[1].unit_price.value == 5.95          # the row was repaired ...
+    assert draft.line_items[1].total_price.value == 517.65       # the row was repaired ...
     assert draft.header.total_amount.value != 212517.65          # ... but cannot confirm the total
+
+
+class TestRowSolvedFromTheInvoiceTotal:
+    """bills/sahror as the laptop read it: rows 1, 3 and 4 repair, row 2
+    ("6 x ٥٠ = ١٢٠" on paper 6 x 200 = 1200) does not, and the total
+    "٢١٤٨٢٠٥" is one digit off 214812.05. Each settles the other."""
+
+    def _draft(self, total_raw="٢١٤٨٢٠٥"):
+        rows = TestHandwrittenMisreads._row
+        draft = InvoiceDraft(line_items=[
+            rows(("16", "١٣٢٥٠", "٢١٢٠٠")), rows(("6", "٥٠", "١٢٠")),
+            rows(("192", "٥٠٧", "1٠٤٠٤")), rows(("87", "٥,٩٥", "٥١٧,٦٥")),
+        ])
+        for i, item in enumerate(draft.line_items):
+            item.row_index = i
+        from string_matching.normalization import parse_number_strict
+
+        draft.header.total_amount = ExtractedValue(value=parse_number_strict(total_raw), confidence=0.9, raw=total_raw)
+        return draft
+
+    def test_the_whole_invoice_comes_out_right(self):
+        draft = reconcile(self._draft())
+        assert [(i.quantity.value, i.unit_price.value, i.total_price.value) for i in draft.line_items] == [
+            (16, 13250, 212000), (6, 200, 1200), (192, 5.7, 1094.4), (87, 5.95, 517.65)]
+        assert draft.header.total_amount.value == 214812.05
+
+    def test_every_corrected_value_is_below_the_review_threshold(self):
+        from core.domain.invoice import REVIEW_CONFIDENCE_THRESHOLD
+
+        draft = reconcile(self._draft())
+        row = draft.line_items[1]
+        assert row.unit_price.confidence < REVIEW_CONFIDENCE_THRESHOLD
+        assert row.total_price.confidence < REVIEW_CONFIDENCE_THRESHOLD
+        assert draft.header.total_amount.confidence < REVIEW_CONFIDENCE_THRESHOLD
+        # A value only re-separated, not corrected, keeps the model's confidence.
+        assert draft.line_items[3].unit_price.confidence == 0.9
+
+    def test_a_total_reading_that_explains_no_row_changes_nothing(self):
+        draft = reconcile(self._draft("٥١٤٨١٤٠٠"))
+        assert draft.header.total_amount.value == 51481400.0
+        assert draft.line_items[1].total_price.value != 1200
+
+
+def test_a_derived_cell_is_present_but_below_the_review_threshold():
+    from core.domain.invoice import REVIEW_CONFIDENCE_THRESHOLD
+
+    item = reconciled(row(quantity=16, unit_price=13250))
+    assert item.total_price.value == 212000
+    assert 0 < item.total_price.confidence < REVIEW_CONFIDENCE_THRESHOLD
+
+
+def test_a_year_misread_by_one_digit_is_offered_when_only_one_fix_fits():
+    from datetime import date
+
+    from string_matching.normalization import repair_year
+
+    assert repair_year("٣٠٢٦/٨/٧") == date(2026, 8, 7)
+    assert repair_year("١٠٢٦/٨/٧") == date(2026, 8, 7)
+    assert repair_year("٧/٨/٢٠٤٦") is None   # 2006, 2016 and 2026 all fit
+    assert repair_year("٧/٨/٢٠٢٦") is None   # nothing to repair

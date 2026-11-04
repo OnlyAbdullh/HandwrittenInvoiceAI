@@ -473,6 +473,18 @@ class TestLabelledLayout:
 
         assert [item.product_name.value for item in draft.line_items] == ["الأول", "الثاني"]
 
+    def test_a_year_one_digit_off_is_offered_for_review(self):
+        from core.domain.invoice import REVIEW_CONFIDENCE_THRESHOLD
+
+        doc = self.document()
+        misread = self.field("date", 460, 170, "التاريخ : ٣٠٢٦/٨/١٥", CellRole.INVOICE_DATE)
+        doc = StructuredDocument(elements=[misread if e.id == "date" else e for e in doc.elements])
+        draft = InvoiceParser().parse(doc, ocr())
+
+        assert draft.header.invoice_date.value == "2026-08-15"
+        assert draft.header.invoice_date.confidence < REVIEW_CONFIDENCE_THRESHOLD
+        assert any(w.code == WarningCodes.MANUAL_REVIEW_REQUIRED and w.field == "invoice_date" for w in draft.warnings)
+
     def test_header_fields_come_from_the_labelled_boxes(self):
         draft = InvoiceParser().parse(self.document(), ocr())
 
