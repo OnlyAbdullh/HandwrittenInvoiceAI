@@ -181,6 +181,7 @@ class BillLayoutClassifier:
         printed_header_row: bool = True,
         footer_from_below: bool = False,
         complete_grid: bool = False,
+        one_cell_per_column: bool = False,
         item_vertical_shift: float = 0.0,
         unruled_fields: list[dict] | None = None,
         field_insets: dict[str, dict] | None = None,
@@ -228,6 +229,16 @@ class BillLayoutClassifier:
         # below is labelled one position off. Measured on both real form-B
         # photos: the first item row was lost exactly that way.
         self.complete_grid = complete_grid
+
+        # Label at most one cell of an item row with each column's role. When
+        # handwriting touches a rule, the extractor can close a second, narrower
+        # box inside a cell; both then carried the column's role, and the parser
+        # keeps whichever it meets last. Measured on bills/onlyone: the first
+        # item's line total had a 140 px fragment beside the 215 px cell, and
+        # the fragment's crop shows "12000" where the paper says 212000. The
+        # cell nearest the column's usual width keeps the role. Off by default
+        # so existing configurations label exactly as before.
+        self.one_cell_per_column = one_cell_per_column
 
         # Move each item cell's box down (positive) or up by this fraction of
         # its height. On a form whose writing sits ON the row rule rather than
@@ -472,16 +483,19 @@ class BillLayoutClassifier:
         # high) was taken as a second line total for the first item.
         clean = [r for r in table_rows if len(r) == self.table_col_count]
         typical_height: dict[int, float] = {}
+        typical_width: dict[int, float] = {}
         for col in range(self.table_col_count):
-            heights = [
-                c.cell.bbox.h for r in clean for c in r
+            sizes = [
+                (c.cell.bbox.w, c.cell.bbox.h) for r in clean for c in r
                 if (s := _nearest_slot(c.x_center, valid, avg_col_width, self.slot_tolerance_ratio)) is not None
                 and slot_centers.index(valid[s]) == col
             ]
-            if heights:
-                typical_height[col] = float(np.median(heights))
+            if sizes:
+                typical_width[col] = float(np.median([w for w, _ in sizes]))
+                typical_height[col] = float(np.median([h for _, h in sizes]))
 
         for row, is_header in [(header_row, True)] + [(r, False) for r in data_rows]:
+            in_column: dict[int, list[_Cell]] = {}
             for cell in row:
                 slot = _nearest_slot(
                     cell.x_center, valid, avg_col_width, self.slot_tolerance_ratio
@@ -498,6 +512,19 @@ class BillLayoutClassifier:
                 cell.role = (
                     CellRole.COLUMN_HEADER if is_header else self.column_roles[col_index]
                 )
+                in_column.setdefault(col_index, []).append(cell)
+
+            if self.one_cell_per_column and not is_header:
+                for col_index, claimants in in_column.items():
+                    # Only the handwritten columns: a printed line number is
+                    # never read, and unlabelling one would send it to the model.
+                    if len(claimants) < 2 or self.column_roles[col_index] not in _ITEM_CELL_ROLES:
+                        continue
+                    usual = typical_width.get(col_index, max(c.cell.bbox.w for c in claimants))
+                    keep = min(claimants, key=lambda c: abs(c.cell.bbox.w - usual))
+                    for cell in claimants:
+                        if cell is not keep:
+                            cell.role = CellRole.UNKNOWN
 
         # The totals strip is the row straight after the data rows when the
         # table's outer rule enclosed it, and a separate group below when it did

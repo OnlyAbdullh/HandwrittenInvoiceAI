@@ -213,6 +213,22 @@ class TestGridCompletion:
         heights = sorted(r.bbox.h for r in layout.with_role(CellRole.LINE_TOTAL))
         assert heights[-1] < 1.5 * heights[len(heights) // 2]
 
+    @pytest.mark.parametrize("fixture", ["form_a_cells.json", "form_b_cells.json"])
+    def test_one_cell_per_column_leaves_a_clean_grid_alone(self, fixture):
+        """The rule exists for a fragment closed inside a cell (the laptop's
+        photo of form B has one beside its first line total). Neither recorded
+        grid has a fragment, so switching it on must label them identically."""
+        from config.loader import load_config
+
+        table, size = load_fixture(fixture)
+
+        def labelled(config_name: str) -> set:
+            params = load_config(f"config/{config_name}").table_extraction.classifier_params
+            layout = BillLayoutClassifier(**params).classify(table, size)
+            return {(r.bbox.as_tuple(), r.role, r.row) for r in layout.regions}
+
+        assert labelled("routed_config.yaml") == labelled("default_config.yaml")
+
     def test_form_a_needs_nothing_inferred(self, two_form_classifier):
         table, size = load_fixture("form_a_cells.json")
         layout = two_form_classifier.classify(table, size)

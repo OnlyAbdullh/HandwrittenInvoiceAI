@@ -46,6 +46,33 @@ def test_every_approach_reads_the_same_page_as_the_default(name: str):
     assert other.table_extraction == default.table_extraction
 
 
+def test_the_routed_config_differs_from_the_default_only_where_it_says():
+    """routed_config.yaml is the default with two readers and the layout's
+    one_cell_per_column rule. Anything else drifting would make its measured
+    comparison with the default (experiments/REPORT.md) about something else."""
+    default = load_config(CONFIG_DIR / "default_config.yaml")
+    routed = load_config(CONFIG_DIR / "routed_config.yaml")
+    assert routed.preprocessing == default.preprocessing
+    assert routed.flow == default.flow
+    assert routed.ocr.cropper == default.ocr.cropper
+
+    def without_rule(params: dict) -> dict:
+        params = {k: v for k, v in params.items() if k != "one_cell_per_column"}
+        params["profiles"] = [{k: v for k, v in p.items() if k != "one_cell_per_column"} for p in params.get("profiles", [])]
+        return params
+
+    assert without_rule(routed.table_extraction.classifier_params) == without_rule(default.table_extraction.classifier_params)
+    assert routed.table_extraction.classifier_params["one_cell_per_column"] is True
+
+    members = routed.ocr.recognizer.params["recognizers"]
+    assert members["qwen"] == {"name": default.ocr.recognizer.name, "params": default.ocr.recognizer.params}
+    nuqta = load_config(CONFIG_DIR / "nuqta_config.yaml").ocr.recognizer
+    assert members["nuqta"]["name"] == nuqta.name
+    assert {k: v for k, v in members["nuqta"]["params"].items() if k != "timeout_s"} == {
+        k: v for k, v in nuqta.params.items() if k != "timeout_s"
+    }
+
+
 @pytest.mark.parametrize("path", CONFIGS, ids=lambda p: p.name)
 def test_config_loads_and_builds(path: Path):
     config = load_config(path)

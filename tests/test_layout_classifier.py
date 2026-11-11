@@ -217,6 +217,26 @@ class TestBillLayout:
         ):
             assert {r.bbox.x for r in layout.with_role(role)} == {x}, role
 
+    def test_one_cell_per_column_leaves_a_fragment_unlabelled(self):
+        """Handwriting that touches a rule closes a second, narrower box inside
+        a cell. Both carried the column's role and the parser kept whichever it
+        met last; on bills/onlyone the fragment's crop cut the first digit off
+        212000."""
+        table = standard_form()
+        table.tables[0].cells.append(cell(330, 372, 110, 56, 3, 6))
+
+        # Off by default: existing configurations label exactly as before.
+        assert len(classify(table).with_role(CellRole.LINE_TOTAL)) == 11
+
+        totals = classify(table, one_cell_per_column=True).with_role(CellRole.LINE_TOTAL)
+        assert len(totals) == 10
+        assert {r.bbox.w for r in totals} == {COL_W}
+
+    def test_one_cell_per_column_changes_nothing_on_a_clean_grid(self):
+        before = {(r.bbox.as_tuple(), r.role) for r in classify().regions}
+        after = {(r.bbox.as_tuple(), r.role) for r in classify(one_cell_per_column=True).regions}
+        assert after == before
+
     def test_the_totals_strip_is_labelled(self):
         """Values sit left of their captions: words | caption | figures | caption | caption."""
         layout = classify()

@@ -57,6 +57,9 @@ python main.py path/to/invoice.jpg config/nuqta_config.yaml
 python tools/check_llamacpp_setup.py [--start] [--image cell.png --kind number]
 INVOICE_AI_CONFIG_PATH=config/nuqta_config.yaml python -m api.main
 
+# Two readers: numbers by Qwen3.5, Arabic text by Nuqta (5x slower, 10 GB RAM) -- experiments/REPORT.md
+python main.py path/to/invoice.jpg config/routed_config.yaml
+
 # Compare every model in OCR_Models/ on one photo (step 2 runs in the VLM venv)
 python tools/export_crops.py --photo my_invoice.jpg --out datasets/my_invoice
 qwen_venv/Scripts/python tools/benchmark_recognizers.py --crops datasets/a datasets/b [--mode pipeline]
@@ -240,10 +243,14 @@ swapped, truncated files fail before anything loads), `server.py` (process lifec
 member recognizers (any registered ones), sends each crop to the member configured for
 its `ContentKind`, and optionally re-reads a crop with a fallback member when the first
 reading's confidence is below a threshold or unknown. Confidences from different models
-are never compared with each other. **No shipped config uses it**: the measured best
+are never compared with each other. **The default does not use it**: the measured best
 single model (Arabic-Qwen3.5-OCR-v4, `docs/recognition-research.md`) stays the default
-until `tools/analyze_benchmark.py` shows a combination beating it on held-out invoices.
-Each member loads its own model, so mind memory.
+until a combination beats it on held-out invoices. `config/routed_config.yaml` is the
+one measured combination that loses nothing end to end -- numbers to Qwen3.5, Arabic
+text to Nuqta, no fallback: same header fields and numbers, name CER 0.18 → 0.11, for
+143 s per invoice against 27 and 10.2 GB against 3.6 (`experiments/REPORT.md`; three
+name cells of eleven, so not yet a reason to switch). Voting and confidence fallback
+measured at or below the default. Each member loads its own model, so mind memory.
 
 Model choice is evidence-driven: `docs/recognition-research.md` (research + measured
 comparison + decision), `docs/evaluation-guide.md` (how to measure),
@@ -389,6 +396,14 @@ closed as its own contour at the top right of `images/test1.jpg`, therefore took
 `invoice_number`, was cropped, read with the free-text prompt, and came back an invented
 Arabic sentence, while the box reading `رقم الفاتورة : 00010` stayed `unknown`. Scoring
 across the whole header block is what makes the corner mean something.
+
+**Two boxes in one item row can carry the same column role.** Handwriting touching a rule
+closes a second, narrower box inside a cell, both are labelled, and the parser keeps
+whichever it meets last (`rows[row][role] = cell`). On the laptop's photo of
+`bills/onlyone` the first line total had a 140 px fragment beside the 215 px cell; its
+crop shows `12000` for 212000. `bill_layout`'s `one_cell_per_column` keeps the cell
+nearest the column's usual width. It is off by default and on in `routed_config.yaml`;
+the recorded fixtures contain no such fragment.
 
 **Preprocessing tuned for a binarizing engine can destroy handwriting for a VLM.** The
 recognizer crops from the OCR-photometric image, not from the page the UI shows, so a step

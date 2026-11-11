@@ -481,6 +481,54 @@ config loading and the box-assignment logic.
   recognise (`NO_LAYOUT_DETECTED` today). That is untested: no such invoice is
   labelled. Revisit only with one.
 
+### 2026-11-11 · Segmentation, boxes, preprocessing, prompts and combinations, 68 configurations
+Full write-up, every number and the scripts: `experiments/REPORT.md`,
+`experiments/results.csv`.
+
+- **Data:** `sahror` + `onlyone`, the same 41 labelled cells. Two invoices of one
+  transaction; one cell is 2.4 points; no held-out set.
+- **Where:** laptop. Qwen3.5, Qwen2.5-VL and Nuqta on CUDA, Surya detection on
+  the CPU.
+- **Method:** every cell cut under a crop recipe and read with the service's
+  prompts (readings cached by crop bytes); then each configuration's readings
+  replayed through the real parser and arithmetic repair
+  (`experiments/e2e_replay.py`). The replay of the default matches its real run
+  field for field.
+- **Result, per cell (before arithmetic repair):**
+
+  | What changed | Cell accuracy |
+  |---|---|
+  | Default: grid cell, gray, pad 10, ×2, Qwen3.5 | 0.37 (15/41) |
+  | Full page / table rows to Qwen3.5 | ≤ 0.17 / ≤ 0.25, scored leniently |
+  | No enlargement / ×3 / ×4 | 0.27 / 0.34 / 0.32 |
+  | Pad 0, 4, 20 / pad 30 | 0.34 to 0.39 / 0.24 |
+  | Surya boxes / ink-tight boxes | 0.27 / 0.32 to 0.44 (name CER up to 0.57) |
+  | CLAHE, sharpen, NLM / Otsu / adaptive threshold | 0.37 / 0.29 / 0.22 |
+  | Model-card prompt / zero-and-comma hint | 0.29 / 0.37 |
+  | Nuqta Q4 or Q8 / Qwen2.5-VL, same crops | 0.32 / 0.29 |
+
+- **Result, end to end:** the default is the best of the 37 cell-level Qwen3.5
+  configurations (header 8/9, numbers 22/24). Variants two or three cells better
+  per cell are worse end to end (16 to 19 of 24 numbers): the arithmetic repair
+  was written from the default's misreadings.
+- **Result, combinations:** voting, confidence fallback and a disagreement
+  referee are at or below the default end to end. Qwen3.5's confidence has an
+  AUROC of 0.83, with 9 wrong readings at ≥ 0.90. Qwen3.5 and Nuqta agree on 8
+  cells and all 8 are right. The oracle over four models is 0.59.
+- **Routing by kind** (numbers Qwen3.5, Arabic text Nuqta Q4), real run of
+  `config/routed_config.yaml`: the same header and numbers, name CER 0.18 → 0.11,
+  products accepted without review 5/8 → 7/8, one customer name down to 0.71;
+  143 s per invoice against 27, 10.2 GB against 3.6. Three name cells of 11,
+  p = 0.38.
+- **Layout defect:** form B's first item row had two boxes labelled line total;
+  the 140 px fragment cut the first digit off 212000. New `bill_layout` option
+  `one_cell_per_column` (default off). No end-to-end change on these photos.
+- **Decision:** `default_config.yaml` stays the default. `routed_config.yaml` is
+  shipped as an option, not recommended until measured on more names.
+  `one_cell_per_column` is on only there. Nothing else adopted.
+- **Left wrong (onlyone):** the total, and row 2's `200` and `1200` read `٢٠١`
+  and `١٢٠٦`. No Qwen3.5 crop reads any of them right.
+
 ### Pending: needs the laptop
 - Re-export both invoices at the working resolution (`export_crops.py` should
   now print `read at ...x2000` and 41 labelled cells), re-run the benchmark on

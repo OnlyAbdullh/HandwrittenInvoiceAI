@@ -1,0 +1,108 @@
+{
+ "saved_at": "2026-11-11T16:15:10",
+ "note": "status check",
+ "cached_readings": {
+  "nuqta_q4": 101,
+  "nuqta_q8": 41,
+  "qwen25": 64,
+  "qwen35": 1504
+ },
+ "steps": [
+  {
+   "step": "prepare",
+   "done": true,
+   "outputs_done": 1,
+   "outputs_total": 1,
+   "command": "prepare.py --surya",
+   "measures": "geometry, layout, labelled cells, Surya text boxes"
+  },
+  {
+   "step": "crops",
+   "done": true,
+   "outputs_done": 37,
+   "outputs_total": 37,
+   "command": "make_crops.py",
+   "measures": "every crop variant"
+  },
+  {
+   "step": "qwen35_variants",
+   "done": true,
+   "outputs_done": 37,
+   "outputs_total": 37,
+   "command": "read_qwen.py --variants base pad0 pad4 pad20 pad30 inset6 expand_x25 expand_y25 expand_y40 ink_tight8 ink_tight16 ink_tight24 surya_tight10 colfix colfix_pad20 up1 up3 up4 h128 h256 up2_cubic color clahe clahe_crop bilateral median adaptive blur_divide otsu nlm sharpen stretch norules row row_up1 row_color page",
+   "measures": "Qwen3.5-OCR-v4 on every cell/row/page variant (P1, P2, P3/P6, P4; bbox, resolution, preprocessing)"
+  },
+  {
+   "step": "qwen35_prompt_card",
+   "done": true,
+   "outputs_done": 1,
+   "outputs_total": 1,
+   "command": "read_qwen.py --variants base --prompts-file prompts/card.json --suffix p_card",
+   "measures": "the model card's own prompt for every kind"
+  },
+  {
+   "step": "qwen35_prompt_hint",
+   "done": true,
+   "outputs_done": 1,
+   "outputs_total": 1,
+   "command": "read_qwen.py --variants base --prompts-file prompts/hint.json --suffix p_hint",
+   "measures": "number prompt explaining the dot-zero and the decimal comma"
+  },
+  {
+   "step": "qwen35_prompt_short",
+   "done": true,
+   "outputs_done": 1,
+   "outputs_total": 1,
+   "command": "read_qwen.py --variants base --prompts-file prompts/short.json --suffix p_short",
+   "measures": "short prompts"
+  },
+  {
+   "step": "qwen35_unconstrained",
+   "done": true,
+   "outputs_done": 1,
+   "outputs_total": 1,
+   "command": "read_qwen.py --variants base --unconstrained --suffix unconstrained",
+   "measures": "numbers and dates without the character-set constraint"
+  },
+  {
+   "step": "qwen35_hires_1280",
+   "done": true,
+   "outputs_done": 2,
+   "outputs_total": 2,
+   "command": "read_qwen.py --variants page row --max-side 1280 --suffix s1280",
+   "measures": "full page and rows sent at 1280 px instead of 768"
+  },
+  {
+   "step": "qwen35_hires_1536",
+   "done": true,
+   "outputs_done": 2,
+   "outputs_total": 2,
+   "command": "read_qwen.py --variants page row --max-side 1536 --suffix s1536",
+   "measures": "full page and rows sent at 1536 px"
+  },
+  {
+   "step": "qwen25_cells",
+   "done": true,
+   "outputs_done": 2,
+   "outputs_total": 2,
+   "command": "read_qwen.py --model OCR_Models/Arabic-handwritten-OCR-4bit-Qwen2.5-VL-3B-v3 --tag qwen25 --variants base colfix",
+   "measures": "Qwen2.5-VL-3B 4-bit: a third reader for disagreement voting"
+  },
+  {
+   "step": "nuqta_q4_cells",
+   "done": true,
+   "outputs_done": 3,
+   "outputs_total": 3,
+   "command": "read_nuqta.py --variants base colfix surya_tight10",
+   "measures": "Nuqta Q4_K_M on grid cells (P7) and Surya boxes (P5)"
+  },
+  {
+   "step": "nuqta_q8_cells",
+   "done": true,
+   "outputs_done": 1,
+   "outputs_total": 1,
+   "command": "read_nuqta.py --quant Q8_0 --tag nuqta_q8 --variants base",
+   "measures": "Nuqta Q8_0 on grid cells"
+  }
+ ]
+}

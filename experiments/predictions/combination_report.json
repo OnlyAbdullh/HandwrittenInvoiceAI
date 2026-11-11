@@ -1,0 +1,245 @@
+{
+ "combinations": [
+  {
+   "name": "P10a_vote_qwen35_nuqta_qwen25",
+   "correct": 16,
+   "n": 41
+  },
+  {
+   "name": "P10b_vote_qwen35_3views_insample",
+   "correct": 16,
+   "n": 41
+  },
+  {
+   "name": "P10c_vote_qwen35_5views_insample",
+   "correct": 16,
+   "n": 41
+  },
+  {
+   "name": "P10d_vote_qwen35_top3_loo",
+   "correct": 15,
+   "n": 41,
+   "views": {
+    "onlyone": [
+     "ink_tight16",
+     "colfix_pad20",
+     "h128"
+    ],
+    "sahror": [
+     "colfix",
+     "base",
+     "h256"
+    ]
+   }
+  },
+  {
+   "name": "P10e_vote_qwen35_top5_loo",
+   "correct": 15,
+   "n": 41,
+   "views": {
+    "onlyone": [
+     "ink_tight16",
+     "colfix_pad20",
+     "h128",
+     "pad20",
+     "stretch"
+    ],
+    "sahror": [
+     "colfix",
+     "base",
+     "h256",
+     "sharpen",
+     "clahe"
+    ]
+   }
+  },
+  {
+   "name": "P9c_route_text_nuqta_q4",
+   "correct": 18,
+   "n": 41
+  },
+  {
+   "name": "P9c_route_text_nuqta_q8",
+   "correct": 18,
+   "n": 41
+  },
+  {
+   "name": "P9c_route_text_qwen25",
+   "correct": 17,
+   "n": 41
+  },
+  {
+   "name": "P9a_maxconf_qwen35_nuqta_q4",
+   "correct": 18,
+   "n": 41
+  },
+  {
+   "name": "P9a_maxconf_qwen35_qwen25",
+   "correct": 16,
+   "n": 41
+  },
+  {
+   "name": "P9b_fallback_qwen35_to_nuqta_q4",
+   "correct": 17,
+   "n": 41,
+   "thresholds": {
+    "onlyone": 0.8514,
+    "sahror": 0.7854
+   }
+  },
+  {
+   "name": "P9b_fallback_qwen35_to_nuqta_q8",
+   "correct": 17,
+   "n": 41,
+   "thresholds": {
+    "onlyone": 0.8514,
+    "sahror": 0.7854
+   }
+  },
+  {
+   "name": "P9b_fallback_qwen35_to_qwen25",
+   "correct": 18,
+   "n": 41,
+   "thresholds": {
+    "onlyone": 0.8,
+    "sahror": 0.88
+   }
+  },
+  {
+   "name": "P10f_disagree_qwen35_nuqta_ref_qwen25",
+   "correct": 16,
+   "n": 41,
+   "reread": 33
+  },
+  {
+   "name": "P10g_disagree_qwen35_2views_ref_nuqta",
+   "correct": 16,
+   "n": 41,
+   "reread": 19
+  },
+  {
+   "name": "ORACLE_3models",
+   "correct": 24,
+   "n": 41
+  },
+  {
+   "name": "ORACLE_qwen35_5views",
+   "correct": 20,
+   "n": 41
+  }
+ ],
+ "calibration": [
+  {
+   "model": "qwen35/base",
+   "auroc": 0.833,
+   "wrong_at_>=0.75": 16,
+   "wrong_at_>=0.90": 9,
+   "n": 41,
+   "correct_by_band": {
+    "0.00-0.50": "0/2",
+    "0.50-0.75": "1/9",
+    "0.75-0.90": "1/8",
+    "0.90-0.99": "4/10",
+    "0.99-1.00": "9/12"
+   }
+  },
+  {
+   "model": "nuqta_q4/base",
+   "auroc": 0.849,
+   "wrong_at_>=0.75": 15,
+   "wrong_at_>=0.90": 2,
+   "n": 41,
+   "correct_by_band": {
+    "0.00-0.50": "0/3",
+    "0.50-0.75": "1/11",
+    "0.75-0.90": "5/18",
+    "0.90-0.99": "6/8",
+    "0.99-1.00": "1/1"
+   }
+  },
+  {
+   "model": "nuqta_q8/base",
+   "auroc": 0.824,
+   "wrong_at_>=0.75": 14,
+   "wrong_at_>=0.90": 3,
+   "n": 41,
+   "correct_by_band": {
+    "0.00-0.50": "0/1",
+    "0.50-0.75": "2/15",
+    "0.75-0.90": "2/13",
+    "0.90-0.99": "7/10",
+    "0.99-1.00": "2/2"
+   }
+  },
+  {
+   "model": "qwen25/base",
+   "auroc": 0.747,
+   "wrong_at_>=0.75": 15,
+   "wrong_at_>=0.90": 5,
+   "n": 41,
+   "correct_by_band": {
+    "0.00-0.50": "0/4",
+    "0.50-0.75": "3/13",
+    "0.75-0.90": "2/12",
+    "0.90-0.99": "6/11",
+    "0.99-1.00": "1/1"
+   }
+  }
+ ],
+ "agreement": [
+  {
+   "pair": "qwen35/base vs nuqta_q4/base",
+   "agree": 8,
+   "agree_and_right": 8,
+   "disagree": 33,
+   "first_right": 7,
+   "second_right": 5
+  },
+  {
+   "pair": "qwen35/base vs qwen25/base",
+   "agree": 8,
+   "agree_and_right": 7,
+   "disagree": 33,
+   "first_right": 8,
+   "second_right": 5
+  },
+  {
+   "pair": "qwen35/base vs qwen35/pad20",
+   "agree": 22,
+   "agree_and_right": 13,
+   "disagree": 19,
+   "first_right": 2,
+   "second_right": 3
+  },
+  {
+   "pair": "qwen35/base vs qwen35/h256",
+   "agree": 27,
+   "agree_and_right": 14,
+   "disagree": 14,
+   "first_right": 1,
+   "second_right": 2
+  },
+  {
+   "pair": "qwen35/base vs nuqta_q8/base",
+   "agree": 10,
+   "agree_and_right": 8,
+   "disagree": 31,
+   "first_right": 7,
+   "second_right": 5
+  }
+ ],
+ "loo_variant_choice": {
+  "qwen35": {
+   "onlyone": {
+    "chosen_on_others": "ink_tight16",
+    "held_out_acc": 0.35,
+    "base_held_out_acc": 0.4
+   },
+   "sahror": {
+    "chosen_on_others": "colfix",
+    "held_out_acc": 0.381,
+    "base_held_out_acc": 0.333
+   }
+  }
+ }
+}

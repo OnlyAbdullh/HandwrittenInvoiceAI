@@ -1,0 +1,346 @@
+{
+ "qwen35/base": {
+  "cells": 41,
+  "wrong": 26,
+  "by_category": {
+   "characters": 9,
+   "wrong_digit": 7,
+   "comma_as_zero": 3,
+   "zero_count": 3,
+   "separator": 2,
+   "cut_or_extra": 1,
+   "hallucinated": 1
+  },
+  "by_role": {
+   "total_amount": {
+    "wrong_digit": 1
+   },
+   "invoice_number": {
+    "separator": 1
+   },
+   "merchant_name": {
+    "characters": 2
+   },
+   "product_name": {
+    "characters": 6,
+    "hallucinated": 1
+   },
+   "line_total": {
+    "cut_or_extra": 1,
+    "wrong_digit": 2,
+    "zero_count": 3
+   },
+   "unit_price": {
+    "wrong_digit": 2,
+    "comma_as_zero": 3,
+    "separator": 1
+   },
+   "city": {
+    "characters": 1
+   },
+   "invoice_date": {
+    "wrong_digit": 1
+   },
+   "total_in_figures": {
+    "wrong_digit": 1
+   }
+  },
+  "examples": {
+   "wrong_digit": [
+    "onlyone/r17c0: 214812.05 -> ٥١٤٨١٤٠٠",
+    "onlyone/r3c0: 200 -> ٢٠١",
+    "onlyone/r3c3: 1200 -> ١٢٠٦",
+    "sahror/r1c1: 7/8/2026 -> ٣٠٢٦/٨/٧",
+    "sahror/r13c2: 214812.05 -> ٢١٤٨٢٠٥",
+    "sahror/r4c2: 200 -> ٥٠",
+    "sahror/r5c1: 1094.4 -> 1٠٤٠٤"
+   ],
+   "separator": [
+    "onlyone/u0: 0001901 -> N/ 0001901",
+    "sahror/r6c2: 5.95 -> ٥٩٥"
+   ],
+   "characters": [
+    "onlyone/u1: أبو جمال طبيخ -> أبو جمال طيف",
+    "onlyone/r2c2: باراشوت ملون -> باراشوت طون",
+    "onlyone/r3c2: بنطلون كتان كبير -> بنطلون كتابان كبير",
+    "onlyone/r5c2: بوري شبابي زارا -> بویری بشایی زارا",
+    "sahror/r1c0: ريف دمشق -> المدينة : ريف دسق",
+    "sahror/r1c2: حسام المارديني -> الاسم : صسام المارديني",
+    "sahror/r4c4: بنطلون كتان كبير -> نطلون كقاره كبير",
+    "sahror/r5c4: بوري وسط لاكوست -> بوري وميط لاكوست",
+    "sahror/r6c4: بوري شبابي زارا -> حوري شباني زارا"
+   ],
+   "cut_or_extra": [
+    "onlyone/r2c4: 212000 -> ١٢٠٠"
+   ],
+   "comma_as_zero": [
+    "onlyone/r4c0: 5.7 -> ٥٠٧",
+    "onlyone/r5c0: 5.95 -> ٥٠٩٥",
+    "sahror/r5c2: 5.7 -> ٥٠٧"
+   ],
+   "zero_count": [
+    "onlyone/r4c3: 1094.4 -> 1.٩٤٤",
+    "sahror/r3c1: 212000 -> ٢١٢٠٠",
+    "sahror/r4c1: 1200 -> ١٢٠"
+   ],
+   "hallucinated": [
+    "sahror/r3c4: باراشوت ملون -> جا رانيت مولون"
+   ]
+  }
+ },
+ "nuqta_q4/base": {
+  "cells": 41,
+  "wrong": 28,
+  "by_category": {
+   "wrong_digit": 17,
+   "characters": 7,
+   "cut_or_extra": 2,
+   "separator": 1,
+   "zero_count": 1
+  },
+  "by_role": {
+   "total_amount": {
+    "wrong_digit": 1
+   },
+   "invoice_number": {
+    "separator": 1
+   },
+   "merchant_name": {
+    "characters": 2
+   },
+   "invoice_date": {
+    "wrong_digit": 2
+   },
+   "unit_price": {
+    "wrong_digit": 6
+   },
+   "line_total": {
+    "cut_or_extra": 1,
+    "wrong_digit": 6,
+    "zero_count": 1
+   },
+   "product_name": {
+    "characters": 5
+   },
+   "quantity": {
+    "wrong_digit": 2
+   },
+   "total_in_figures": {
+    "cut_or_extra": 1
+   }
+  },
+  "examples": {
+   "wrong_digit": [
+    "onlyone/r17c0: 214812.05 -> ٢١٤١٥،١٥",
+    "onlyone/u2: 7/8/2026 -> ٢٠٥٦/٨/٧",
+    "onlyone/r2c0s: 13250 -> ١٣٦٥٠",
+    "onlyone/r3c3: 1200 -> ١٢٫١",
+    "onlyone/r4c1: 192 -> 195",
+    "onlyone/r4c0: 5.7 -> 0,7",
+    "onlyone/r4c3: 1094.4 -> 1.452",
+    "onlyone/r5c0: 5.95 -> 0,90",
+    "onlyone/r5c3: 517.65 -> 011,70",
+    "sahror/r1c1: 7/8/2026 -> ١٠٢٦ / ٨ / ٧",
+    "sahror/r4c2: 200 -> ٦٠",
+    "sahror/r4c1: 1200 -> ١٤٠٠",
+    "sahror/r5c3: 192 -> 195",
+    "sahror/r5c2: 5.7 -> ٥٦٧",
+    "sahror/r5c1: 1094.4 -> 1.9313",
+    "sahror/r6c2: 5.95 -> 0,90",
+    "sahror/r6c1: 517.65 -> 014,70"
+   ],
+   "separator": [
+    "onlyone/u0: 0001901 -> № 0001901"
+   ],
+   "characters": [
+    "onlyone/u1: أبو جمال طبيخ -> أبو جهال طيخ",
+    "onlyone/r4c2: بوري وسط لاكوست -> بوري وسط لالاكوست",
+    "sahror/r1c2: حسام المارديني -> الاسم: حسام الحارثي",
+    "sahror/r3c4: باراشوت ملون -> جار خشوت ملون",
+    "sahror/r4c4: بنطلون كتان كبير -> بنطلون كمامه كبير",
+    "sahror/r5c4: بوري وسط لاكوست -> بوري وسيط لاكوس",
+    "sahror/r6c4: بوري شبابي زارا -> جوري شبابي زارا"
+   ],
+   "cut_or_extra": [
+    "onlyone/r2c4: 212000 -> ١٢٠٠٠",
+    "sahror/r13c2: 214812.05 -> ٢١٤٨١٢٫٠"
+   ],
+   "zero_count": [
+    "sahror/r3c1: 212000 -> ٢١٢"
+   ]
+  }
+ },
+ "nuqta_q8/base": {
+  "cells": 41,
+  "wrong": 28,
+  "by_category": {
+   "wrong_digit": 14,
+   "characters": 7,
+   "cut_or_extra": 3,
+   "zero_count": 2,
+   "separator": 1,
+   "comma_as_zero": 1
+  },
+  "by_role": {
+   "total_amount": {
+    "wrong_digit": 1
+   },
+   "invoice_number": {
+    "separator": 1
+   },
+   "merchant_name": {
+    "characters": 2
+   },
+   "invoice_date": {
+    "wrong_digit": 1,
+    "cut_or_extra": 1
+   },
+   "unit_price": {
+    "wrong_digit": 4,
+    "comma_as_zero": 1,
+    "zero_count": 1
+   },
+   "line_total": {
+    "cut_or_extra": 1,
+    "wrong_digit": 6,
+    "zero_count": 1
+   },
+   "product_name": {
+    "characters": 5
+   },
+   "quantity": {
+    "wrong_digit": 2
+   },
+   "total_in_figures": {
+    "cut_or_extra": 1
+   }
+  },
+  "examples": {
+   "wrong_digit": [
+    "onlyone/r17c0: 214812.05 -> ٢١٤١٥,١٥",
+    "onlyone/u2: 7/8/2026 -> ٢٠٥٦/٧/١٧",
+    "onlyone/r2c0s: 13250 -> ١٣٦٥",
+    "onlyone/r3c3: 1200 -> ١٢٫١",
+    "onlyone/r4c1: 192 -> 195",
+    "onlyone/r4c3: 1094.4 -> 1.452",
+    "onlyone/r5c0: 5.95 -> 0,90",
+    "onlyone/r5c3: 517.65 -> 011,70",
+    "sahror/r4c1: 1200 -> ١٤٠٠",
+    "sahror/r5c3: 192 -> 195",
+    "sahror/r5c2: 5.7 -> ٥١٧",
+    "sahror/r5c1: 1094.4 -> 1.9313",
+    "sahror/r6c2: 5.95 -> 0,90",
+    "sahror/r6c1: 517.65 -> 014,70"
+   ],
+   "separator": [
+    "onlyone/u0: 0001901 -> № 0001901"
+   ],
+   "characters": [
+    "onlyone/u1: أبو جمال طبيخ -> أبو جهال طيخ",
+    "onlyone/r4c2: بوري وسط لاكوست -> بوري وسط لالكوست",
+    "sahror/r1c2: حسام المارديني -> الاسم: حسام الحارثي",
+    "sahror/r3c4: باراشوت ملون -> جار شوت ملون",
+    "sahror/r4c4: بنطلون كتان كبير -> بنطلون لمامه كبير",
+    "sahror/r5c4: بوري وسط لاكوست -> بوري وسيط لآلوس",
+    "sahror/r6c4: بوري شبابي زارا -> جوري شبابي زارا"
+   ],
+   "cut_or_extra": [
+    "onlyone/r2c4: 212000 -> ١٢٠٠",
+    "sahror/r1c1: 7/8/2026 -> ١٧ / ٨ / ٢٠٢٦",
+    "sahror/r13c2: 214812.05 -> ٢١٤٨١٢٫٠"
+   ],
+   "comma_as_zero": [
+    "onlyone/r4c0: 5.7 -> ٥٠٧"
+   ],
+   "zero_count": [
+    "sahror/r3c1: 212000 -> ٢١٢",
+    "sahror/r4c2: 200 -> ٢٠"
+   ]
+  }
+ },
+ "qwen25/base": {
+  "cells": 41,
+  "wrong": 29,
+  "by_category": {
+   "wrong_digit": 15,
+   "characters": 8,
+   "zero_count": 3,
+   "cut_or_extra": 2,
+   "comma_as_zero": 1
+  },
+  "by_role": {
+   "invoice_number": {
+    "wrong_digit": 1
+   },
+   "merchant_name": {
+    "characters": 1
+   },
+   "invoice_date": {
+    "wrong_digit": 1
+   },
+   "line_total": {
+    "wrong_digit": 5,
+    "cut_or_extra": 1,
+    "zero_count": 2
+   },
+   "product_name": {
+    "characters": 6
+   },
+   "unit_price": {
+    "wrong_digit": 6,
+    "zero_count": 1
+   },
+   "quantity": {
+    "wrong_digit": 2,
+    "cut_or_extra": 1
+   },
+   "city": {
+    "characters": 1
+   },
+   "total_in_figures": {
+    "comma_as_zero": 1
+   }
+  },
+  "examples": {
+   "wrong_digit": [
+    "onlyone/u0: 0001901 -> N° 1001901",
+    "onlyone/u2: 7/8/2026 -> 2020/7/1",
+    "onlyone/r2c4: 212000 -> 123111",
+    "onlyone/r3c0: 200 -> 211",
+    "onlyone/r3c3: 1200 -> 123",
+    "onlyone/r4c0: 5.7 -> 0,71",
+    "onlyone/r4c3: 1094.4 -> 1942",
+    "onlyone/r5c1: 87 -> . . .",
+    "onlyone/r5c0: 5.95 -> 0,90",
+    "sahror/r3c3: 16 -> 17",
+    "sahror/r3c2: 13250 -> 1320",
+    "sahror/r5c2: 5.7 -> 0.7",
+    "sahror/r5c1: 1094.4 -> 1.9414",
+    "sahror/r6c2: 5.95 -> 0,90",
+    "sahror/r6c1: 517.65 -> 017-70"
+   ],
+   "characters": [
+    "onlyone/u1: أبو جمال طبيخ -> د أبو جمال طيغ",
+    "onlyone/r3c2: بنطلون كتان كبير -> بنطلون كتان حبر",
+    "onlyone/r4c2: بوري وسط لاكوست -> بورى وبطن لاكوت",
+    "onlyone/r5c2: بوري شبابي زارا -> يوري شاي زار",
+    "sahror/r1c0: ريف دمشق -> المدينة :\nربى دمشق",
+    "sahror/r3c4: باراشوت ملون -> حار شو ت ملون",
+    "sahror/r4c4: بنطلون كتان كبير -> بنطلون كتابة كبير",
+    "sahror/r6c4: بوري شبابي زارا -> جوري شبابي زارا"
+   ],
+   "cut_or_extra": [
+    "onlyone/r5c3: 517.65 -> 17.6",
+    "sahror/r6c3: 87 -> 8"
+   ],
+   "comma_as_zero": [
+    "sahror/r13c2: 214812.05 -> 214812005"
+   ],
+   "zero_count": [
+    "sahror/r3c1: 212000 -> 212",
+    "sahror/r4c2: 200 -> 20",
+    "sahror/r4c1: 1200 -> 120"
+   ]
+  }
+ }
+}

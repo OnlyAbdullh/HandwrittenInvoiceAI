@@ -1,0 +1,6 @@
+{
+ "qwen35/base": {"real_run_s_per_invoice": 26.9, "real_run_peak_ram_mb": 3647.6, "real_run_report": "evaluation/reports/20261111-124645-default_config-baseline-final.md (config/default_config.yaml; 14.5 s and 2888 MB in the 2026-11-04 run)"},
+ "combo/P9c_route_text_nuqta_q4": {"real_run_s_per_invoice": 143.2, "real_run_peak_ram_mb": 10204.5, "real_run_report": "evaluation/reports/*-routed_config-routed.md (config/routed_config.yaml, with one_cell_per_column)"},
+ "nuqta_q4/base": {"real_run_s_per_invoice": 59.5, "real_run_peak_ram_mb": 9365.2, "real_run_report": "evaluation/reports/pipeline_comparison.md (config/nuqta_config.yaml, 2026-11-04 run)"},
+ "qwen35/surya_tight10": {"real_run_s_per_invoice": 25.6, "real_run_peak_ram_mb": 5179.7, "real_run_report": "evaluation/reports/pipeline_comparison.md (config/qwen_detector_config.yaml, 2026-11-04 run; the service's own detector flow, not this crop variant)"}
+}

@@ -1,0 +1,155 @@
+# The most accurate reading measured so far: the printed grid's cells, numbers
+# read by Arabic-Qwen3.5-OCR-v4 and Arabic text by Nuqta. Identical to
+# default_config.yaml except for `ocr.recognizer` and the layout's
+# `one_cell_per_column`.
+#
+#     python main.py path/to/invoice.jpg config/routed_config.yaml
+#     INVOICE_AI_CONFIG_PATH=config/routed_config.yaml python -m api.main
+#
+# What it buys and what it costs, measured on the two labelled invoices
+# (experiments/REPORT.md): the same header fields and numbers as the default,
+# better raw names, and a second model's load time, memory and reading time.
+# default_config.yaml stays the shipped default.
+
+preprocessing:
+  geometric_steps:
+    - {name: perspective_correction, enabled: true, params: {canny_low: 30, canny_high: 150, margin: 0.15}}
+    - {name: deskew_hough, enabled: true, params: {hough_threshold: 100, min_line_length: 150, max_line_gap: 10, max_angle_deg: 20}}
+
+  # As in default_config.yaml: the VLM reads grayscale, and blur-divide washes
+  # light-blue ballpoint out (measured with the Qwen model; not yet re-measured
+  # with Nuqta -- the settings page can A/B it).
+  ocr_photometric_steps:
+    - {name: channel_selection, enabled: true, params: {channel: gray}}
+    - {name: illumination_normalization_blur_divide, enabled: false, params: {blur_kernel: 95}}
+    - {name: clahe, enabled: false, params: {clip_limit: 2.0, tile_grid_size: [8, 8]}}
+    - {name: bilateral_filter, enabled: false, params: {d: 5, sigma_color: 50, sigma_space: 50}}
+    - {name: adaptive_threshold, enabled: false, params: {block_size: 51, c: 35}}
+    - {name: morphological_cleanup, enabled: false, params: {operation: open, kernel_size: 2}}
+
+  table_photometric_steps:
+    - {name: channel_selection, enabled: true, params: {channel: gray}}
+    - {name: adaptive_threshold, enabled: true, params: {block_size: 15, c: 10, invert: true}}
+
+flow:
+  name: layout_driven
+
+ocr:
+  cropper:
+    name: padded_crop
+    params: {pad: 10, upscale: 2, min_side: 8, min_ink_ratio: 0.01}
+
+  # Two models behind one recognizer (ocr/recognizers/routed_recognizer.py): each
+  # cell is read once, by the model configured for its content kind. Numbers,
+  # dates and the invoice number go to Arabic-Qwen3.5-OCR-v4; handwritten Arabic
+  # text (product, customer, city) goes to Nuqta, with its model card's settings
+  # exactly as in nuqta_config.yaml. No confidence fallback: measured, it lowered
+  # the end-to-end result (experiments/REPORT.md).
+  #
+  # Both models are loaded. On a 4 GB GPU the Qwen worker takes the card and
+  # llama.cpp fits what is left, so Nuqta runs largely on the CPU.
+  #   INVOICE_AI_VLM_PYTHON, INVOICE_AI_MODEL_DIR            as in default_config.yaml
+  #   INVOICE_AI_NUQTA_MODEL, INVOICE_AI_NUQTA_MMPROJ,
+  #   INVOICE_AI_LLAMA_SERVER, INVOICE_AI_LLAMA_GPU_LAYERS   as in nuqta_config.yaml
+  recognizer:
+    name: routed
+    params:
+      default: qwen
+      routes: {arabic_text: nuqta}
+      recognizers:
+        qwen:
+          name: qwen
+          params:
+            backend: subprocess
+            worker_python: "${INVOICE_AI_VLM_PYTHON:-qwen_venv/Scripts/python.exe}"
+            worker_script: "tools/qwen_worker.py"
+            model_path: "${INVOICE_AI_MODEL_DIR:-OCR_Models/Arabic-Qwen3.5-OCR-v4}"
+            max_new_tokens: 64
+            batch_size: 4
+            timeout_s: 120
+            default_kind: any
+        nuqta:
+          name: llamacpp
+          params:
+            model_path: "${INVOICE_AI_NUQTA_MODEL:-OCR_Models/Nuqta-Arabic-OCR-4B-GGUF/nuqta-ocr-4b-Q4_K_M.gguf}"
+            mmproj_path: "${INVOICE_AI_NUQTA_MMPROJ:-OCR_Models/Nuqta-Arabic-OCR-4B-GGUF/nuqta-ocr-4b-mmproj-f16.gguf}"
+            server_path: "${INVOICE_AI_LLAMA_SERVER:-llama-server}"
+            gpu_layers: "${INVOICE_AI_LLAMA_GPU_LAYERS:-auto}"
+            mmproj_offload: true
+            image_min_tokens: auto
+            repetition_penalty: 1.0
+            prompts:
+              number: &nuqta_prompt "Transcribe the Arabic text in this image without any diacritics."
+              date: *nuqta_prompt
+              code: *nuqta_prompt
+              arabic_text: *nuqta_prompt
+              any: *nuqta_prompt
+            ctx_size: 4096
+            max_new_tokens: 64
+            timeout_s: 300
+            startup_timeout_s: 600
+            default_kind: any
+
+table_extraction:
+  extractor: contour_based
+  extractor_params: {}
+  classifier: bill_layout
+  classifier_params:
+    table_row_count: 10
+    table_col_count: 6
+    # Left to right, as the columns of this RTL form appear in pixel order.
+    column_roles: [notes, line_total, unit_price, quantity, product_name, line_number]
+    # Rebuild item rows the extractor only partly found, from the measured row
+    # pitch and column edges -- one open contour must not drop a row and shift
+    # every row below it (measured: form B lost its first item that way).
+    complete_grid: true
+    # At most one cell of an item row per column -- see bill_layout_classifier.py.
+    one_cell_per_column: true
+    profiles:
+      - profile_name: form_b_bilingual     # 4 columns, 15 rows, header band not ruled
+        table_row_count: 15
+        table_col_count: 4
+        column_roles: [unit_price, quantity, product_name, line_total]
+        header_roles: []
+        footer_roles: [total_amount, label]
+        # The page is kept around the table (perspective_correction's margin),
+        # so the printed caption row and the totals strip are inside the
+        # detected outline: the caption row is a header, the totals strip the
+        # row after the items.
+        printed_header_row: true
+        footer_from_below: false
+        ragged_row_slack: 1
+        complete_grid: true
+        one_cell_per_column: true
+        # Printed on dotted lines above the table, not in boxes, so no extractor
+        # finds them; declared relative to the table outline (fractions of its
+        # width from the left edge, of its height from the top; negative is
+        # above). Measured on bills/onlyone.
+        unruled_fields:
+          - {role: invoice_number, x: [0.04, 0.42],   y: [-0.11, -0.058]}
+          - {role: merchant_name,  x: [0.38, 0.80],   y: [-0.068, -0.002]}
+          - {role: invoice_date,   x: [-0.06, 0.235], y: [-0.055, -0.002]}
+        # The writing sits ON each row's dotted rule, so the printed cell
+        # holds the tails of the row above and cuts off the bottom of its own
+        # digits. A quarter of a row down recentres every item crop on its own
+        # writing (inspected at 0, 0.2, 0.3, 0.4: 0.4 starts taking the row
+        # below).
+        item_vertical_shift: 0.25
+        # The totals strip is one box holding "المجموع", a dotted line,
+        # "فقط لا غير" and the figures; read whole, the figures came back as
+        # '3148150 ... ٥٠١'. Only the part where the figures are written.
+        field_insets:
+          total_amount: {x: [0.22, 0.84], y: [0.18, 1.0]}
+
+string_matching:
+  algorithm: levenshtein
+  algorithm_params: {max_distance: 2}
+  dictionary_path: "keywords/ar_invoice_terms.json"
+
+output:
+  formatter: invoice_json
+  formatter_params: {}
+
+persistence:
+  store: file_result_store
+  store_params: {output_dir: "results/"}

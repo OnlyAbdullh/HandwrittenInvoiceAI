@@ -1,0 +1,5 @@
+# Pages and crops cut from the invoice photos: reproducible with prepare.py and
+# make_crops.py, and the photos themselves are not in the repository.
+cache/
+STOP
+__pycache__/
