@@ -129,6 +129,17 @@ class StringMatchingConfig(BaseModel):
     algorithm_params: dict = Field(default_factory=dict)
     dictionary_path: str
 
+    # How a line item's name is matched against the request's product catalog
+    # (string_matching/product_matchers/). Separate from `algorithm`, which
+    # corrects any element against the keyword dictionary. `coverage` handles
+    # shortened names and classifies its answer; `word_overlap` is the
+    # original matcher, kept as the baseline and the rollback.
+    product_matcher: str = "coverage"
+    product_matcher_params: dict = Field(default_factory=dict)
+
+    # Word variants and inactive markers (string_matching/product_vocabulary.py).
+    product_vocabulary_path: str = "keywords/product_vocabulary.json"
+
 
 class OutputConfig(BaseModel):
     formatter: str

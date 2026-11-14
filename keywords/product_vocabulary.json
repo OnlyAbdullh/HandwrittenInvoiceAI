@@ -1,0 +1,15 @@
+{
+ "_comment": "What this installation knows about how its product names are worded. Server-owned: read from string_matching.product_vocabulary_path, never from a request. 'word_variants' lists spellings of one word, canonical first; they are folded on both sides before product matching, so one line covers every product containing the word. Only add words that mean the same thing -- look-alikes that are different words (جامو / جامبو, بوري / بورش, صيني / صيفي) must stay apart. 'inactive_markers' are words that mark a catalog row as cancelled; such rows never take part in matching. tools/check_catalog.py suggests candidates for both lists.",
+ "word_variants": [
+  ["بنطال", "بنطلون"],
+  ["جينز", "جبنز"],
+  ["لوجو", "لوغو"],
+  ["داوود", "داود"],
+  ["كينزو", "كنزو"],
+  ["شورت", "شورط"],
+  ["موديل", "مديل"],
+  ["براشوت", "برشوت", "باراشوت"],
+  ["جكار", "جاكار"]
+ ],
+ "inactive_markers": ["الغاء"]
+}

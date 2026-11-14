@@ -57,6 +57,11 @@ class ExtractedValue:
     candidates: list[dict] = field(default_factory=list)
     requires_manual_review: bool = False
 
+    # How a product match was classified (core.domain.catalog.MatchOutcome),
+    # for the audit trail. Not on the /extract wire: the candidates' scores
+    # already carry it, as "reaches the review threshold or does not".
+    match_outcome: str | None = None
+
     bbox: BoundingBox | None = None
 
     @classmethod
@@ -94,6 +99,7 @@ class ExtractedValue:
             match_score=best.score_fraction if best else None,
             candidates=[candidate.as_dict() for candidate in match.candidates],
             requires_manual_review=match.requires_manual_review,
+            match_outcome=match.outcome.value if match.outcome else None,
             bbox=bbox,
         )
 
@@ -110,6 +116,7 @@ class ExtractedValue:
             ),
             "candidates": self.candidates,
             "requires_manual_review": self.requires_manual_review,
+            "match_outcome": self.match_outcome,
             "bbox": _bbox_to_wire(self.bbox),
         }
 

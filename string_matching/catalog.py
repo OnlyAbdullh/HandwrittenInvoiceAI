@@ -11,7 +11,7 @@ matching.
 
 from __future__ import annotations
 
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Sequence
 
 from core.domain.catalog import (
     REVIEW_SCORE_THRESHOLD,
@@ -24,11 +24,11 @@ from string_matching.algorithms import (
     DEFAULT_TOP_K,
     ScoredCandidate,
     levenshtein_similarity,
-    product_match_similarity,
 )
 
 __all__ = [
     "REVIEW_SCORE_THRESHOLD",
+    "default_product_matcher",
     "CatalogEntry",
     "Catalogs",
     "FieldMatch",
@@ -98,15 +98,32 @@ def match_product(
     products: Iterable[CatalogEntry],
     top_k: int = DEFAULT_TOP_K,
 ) -> FieldMatch:
-    """Product name: order-independent word matching.
+    """Product name, matched by the default product matcher with no vocabulary.
 
-    Products carry a name and nothing else, so the name is the entire matching
-    surface; the id only travels back so the app can link the line to the row.
+    A convenience for callers that have no configuration to build a matcher
+    from. The pipeline does not use it: the orchestrator builds the configured
+    matcher, with this machine's product vocabulary, and hands it to the
+    parser (`string_matching.factory.build_product_matcher`).
     """
-    return FieldMatch(
-        ocr_raw_text=text or "",
-        candidates=top_entry_matches(text, products, product_match_similarity, top_k),
-    )
+    return default_product_matcher().match(text, _as_sequence(products), top_k)
+
+
+_default_product_matcher = None
+
+
+def default_product_matcher():
+    """The coverage matcher with an empty vocabulary, built on first use."""
+    global _default_product_matcher
+    if _default_product_matcher is None:
+        # Imported here: the matcher modules import this one's siblings.
+        from string_matching.product_matchers.coverage_matcher import CoverageProductMatcher
+
+        _default_product_matcher = CoverageProductMatcher()
+    return _default_product_matcher
+
+
+def _as_sequence(entries: Iterable[CatalogEntry]) -> Sequence[CatalogEntry]:
+    return entries if isinstance(entries, (list, tuple)) else list(entries)
 
 
 def match_city(

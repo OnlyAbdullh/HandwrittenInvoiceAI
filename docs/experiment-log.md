@@ -529,6 +529,88 @@ Full write-up, every number and the scripts: `experiments/REPORT.md`,
 - **Left wrong (onlyone):** the total, and row 2's `200` and `1200` read `٢٠١`
   and `١٢٠٦`. No Qwen3.5 crop reads any of them right.
 
+### 2026-11-14 · Product matching against the real catalog: ranking and acceptance separated
+
+Report: `evaluation/reports/20261114-product-matching.md` (and `.json`), from
+`tools/evaluate_matching.py --catalog keywords.xlsx --readings experiments/predictions
+--add-missing-products --simulate`. No model runs; it repeats exactly.
+
+- **Data:** `keywords.xlsx`, the real product catalog: 341 names, 335 active (6
+  contain `الغاء`). The earlier evaluations used a 9-product catalog, on which
+  product top-1 was 8/8 for almost everything and separated nothing.
+- **What the catalog is like** (`tools/check_catalog.py keywords.xlsx`): median 6
+  words a name; 226 names have another name scoring ≥ 0.75 against them under the
+  original matcher; 21 groups differ only in their numbers; in 42 pairs one name's
+  words are all contained in the other's; one name is there twice (`قشاط 4 سم صيني` = `قشاط صيني 4سم`).
+- **Real readings:** the 344 product-name readings already cached by the
+  2026-11-11 experiments (four models, 68 crop recipes), four products. Those four
+  are not in the catalog, so they were added to it. They have no look-alikes there,
+  which is why real data cannot yet rank matchers.
+- **Simulated readings:** every active name written twice, in full and shortened,
+  misread at the rates measured on 396 real (label, reading) pairs: average letter
+  error 14.4%, concentrated in ب, ش, ت, س, م (roughly a quarter to two fifths of
+  them misread) while ا, و, ر, ك, ط, ز are rarely wrong; a word split in two at
+  about one word boundary in ten, never two joined.
+  **Assumed, not measured:** digits and Latin letters are misread at the average
+  rate; shorthand is a random subset of the words. Real writers choose what to drop.
+- **Matchers:** `word_overlap` (the original: uniform word overlap over the larger
+  word count, accepted at score ≥ 0.75) and `coverage` (new default).
+
+  | Written form | Matcher | Top-1 | In top 5 | Accepted | Wrong accepts | Accepted with the intended product removed |
+  |---|---|---|---|---|---|---|
+  | Real, 68 crop recipes (344) | word_overlap | 96.5% | 98.3% | 60.8% | 3 | 3 |
+  | | coverage | 93.9% | 96.5% | 74.1% | 3 | 3 |
+  | Real, the service's own crops (32) | word_overlap | 32/32 | 32/32 | 24 | 0 | 0 |
+  | | coverage | 32/32 | 32/32 | 28 | 0 | 0 |
+  | Full name (670) | word_overlap | 97.8% | 100% | 65.8% | 5 | 17.8% |
+  | | coverage | 97.3% | 100% | 57.5% | 0 | 1.6% |
+  | No numbers (336) | word_overlap | 40.8% | 94.6% | 10.7% | 19 | 7.1% |
+  | | coverage | 75.0% | 97.6% | 0% | 0 | 0% |
+  | Half the words (648) | word_overlap | 39.4% | 76.5% | 0.9% | 6 | 0.9% |
+  | | coverage | 67.3% | 94.1% | 1.5% | 7 | 1.9% |
+  | Three words (562) | word_overlap | 29.5% | 60.9% | 2.1% | 7 | 1.2% |
+  | | coverage | 61.2% | 88.1% | 0.9% | 5 | 0.9% |
+  | Two words (648) | word_overlap | 18.2% | 47.4% | 0.3% | 2 | 0.3% |
+  | | coverage | 46.0% | 77.0% | 1.5% | 3 | 0.9% |
+
+- **Acceptance was the defect, not ranking.** With the intended product removed
+  from the catalog — a product not entered yet — the original matcher accepts a
+  sibling for 17.8% of full-name readings, and 41% at half the misreading rate: a
+  cleaner reading scores higher against the wrong sibling. `coverage` accepts 1.6%.
+  Its price is fewer rows accepted unseen (57.5% against 65.8%).
+- **Shorthand is where ranking changes.** Dividing by the larger word count buries
+  the long product a short name was written for. Before any misreading, the words
+  kept by "half" are contained in exactly one name for 51% of readings, in 2–5 for
+  34% and in more than five for 15%: half of shortened names cannot be resolved
+  from the text by any matcher.
+- **Parameters** (`coverage_weight`, `word_threshold`), swept on the same sets:
+  weight 0.3 / 0.5 / 0.7 changes full-name ranking by under half a point and
+  half-name top-5 from 86.6% to 91.7%, so 0.7. A word threshold just above 0.5
+  instead of 0.5 cuts full-name acceptance from 57.5% to 44.0% for a look-alike
+  rate of 0.9% instead of 1.6%, so 0.5. The sweep ran before numbers were ranked
+  by closeness (half-name top-5 is 94.1% now), and both values were chosen on the
+  sets they are reported on.
+- **Tried and dropped:** weighting rare words more (IDF) — worse full-name
+  ranking, no gain on shorthand. Hand-set cheaper substitutions between letters of
+  the same shape — worse ranking on real and simulated readings. Folding written
+  words to a canonical spelling, and crediting a joined word pair per word — both
+  wrong, both found on the real readings (CLAUDE.md, Traps).
+- **Where `coverage` is worse:** on the 344 real readings it ranks 9 fewer first.
+  Of its 21 misses the original also misses 11 (the crop shows another row). Of
+  the other 10, 5 put the catalog's own `بنطال كتان جيب كبير` above the added
+  label `بنطلون كتان كبير`, which the variant table makes near-identical; 4 are
+  readings holding two rows or leaked columns; 1 is a plain loss. It tolerates
+  stray extra text less than the original does. On the crops the service
+  actually produces, neither matcher misses.
+- **Left open:** the 7 wrong accepts on half-names are shortened names that are
+  themselves another product's full name (`قشاط محير` / `قشاط مطاط محير`). A full
+  name is accepted even when longer names also fit; whether that is right depends
+  on how writers shorten, which only real invoices show.
+- **Decision:** `coverage` is the default; `word_overlap` stays registered as the
+  baseline and rollback. Thresholds stay provisional until 20–30 invoices with
+  real shorthand are labelled.
+- **Time:** 19 ms per reading against 50 ms, pure Python, on the laptop.
+
 ### Pending: needs the laptop
 - Re-export both invoices at the working resolution (`export_crops.py` should
   now print `read at ...x2000` and 41 labelled cells), re-run the benchmark on

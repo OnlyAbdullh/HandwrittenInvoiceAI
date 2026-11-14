@@ -59,6 +59,12 @@ service's own configuration**. The request's values are accepted for compatibili
 ignored, and logged. They name executables and directories, and a request must never
 choose what the machine runs (see `enforce_server_owned`).
 
+`string_matching.product_matcher`, `product_matcher_params` and
+`product_vocabulary_path` are server-owned too, and silently: they are new, optional
+fields a client need not send. `GET /configuration` includes them; sending them back
+changes nothing. Which product matcher runs was chosen by measurement
+(`docs/experiment-log.md`), and the vocabulary is a file on the machine.
+
 Still request-controlled: `preprocessing`, `flow` (name and params), `table_extraction`
 (extractor, classifier and their params, including form `profiles`), and
 `string_matching.algorithm` / `algorithm_params`. The `output` formatter is forced to

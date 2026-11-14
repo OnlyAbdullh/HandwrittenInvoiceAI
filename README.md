@@ -52,8 +52,9 @@ preprocessing/
 ocr/                Engines, detectors, refiners, croppers, recognizers + factories
 table_extraction/   Extractor adapters (grid_line, contour_based) + factory
 mapping/            CellMapper: OCR fragments + table cells -> StructuredDocument
-string_matching/    Normalization, the two similarity algorithms, catalog matching,
-                     and the keyword-dictionary matcher adapters + factory
+string_matching/    Normalization, the similarity algorithms, catalog matching, the
+                     product matchers and their vocabulary, and the
+                     keyword-dictionary matcher adapters + factories
 invoice/            The semantic layer: elements -> header fields + line items + warnings
 output/             Formatter adapters (invoice_json, ui_overlay_json, csv) + factory
 persistence/        ResultStore adapter (file_result_store) for audit/reproducibility
@@ -89,13 +90,30 @@ Two algorithms, because names fail in two different ways:
 | Field | Algorithm | Why |
 |---|---|---|
 | Merchant, city, governorate | Normalized Levenshtein over the whole string | Read as one run of characters; they go wrong one letter at a time. |
-| Product name | Order-independent word matching | The words are usually right but their order is not. "جاكيت صوف أزرق" and "جاكيت أزرق صوف" are the same product; each OCR word takes its best score against the catalog words, and the total is divided by the larger word count so extra words on either side dilute it. |
+| Product name | Word coverage, then an evidence check (`string_matching/product_matchers/`) | Word order varies ("جاكيت صوف أزرق" / "جاكيت أزرق صوف"), writers shorten names, and a product catalog is full of siblings that differ by one word or one size. |
 
-Both return the **top five** matches ranked highest-first, not a single answer: the
-desktop app pre-selects the best one and offers the rest, so confirming a correct read
-costs nothing and correcting a wrong one costs a click. Anything scoring below 0.75 is
-returned with `requires_manual_review` set and the raw OCR text left as the value — a
-wrong confident match silently corrupts an invoice.
+Both return the top matches ranked highest-first, not a single answer: the desktop app
+pre-selects the best one and offers the rest, so confirming a correct read costs nothing
+and correcting a wrong one costs a click. Anything scoring below 0.75 is returned with
+`requires_manual_review` set and the raw OCR text left as the value — a wrong confident
+match silently corrupts an invoice.
+
+For a product, the top score reaches 0.75 only when every written word is explained by the
+product's name and every word of the name was written, sizes and model numbers exactly. A
+shortened name, a name several products fit, and a name with a word no product has are all
+ranked and sent for review. Spelling variants of a word (`بنطلون` / `بنطال`) and the word
+that marks a cancelled product (`الغاء`) are declared once, in
+`keywords/product_vocabulary.json`.
+
+```bash
+python tools/check_catalog.py keywords.xlsx       # duplicates, look-alike words, sibling products
+python tools/evaluate_matching.py --catalog keywords.xlsx --readings labelled.jsonl
+```
+
+`labelled.jsonl` holds one reading per line with the product it was meant to be:
+`{"reading": "بنطلون كنان كبير", "product": "بنطال كتان جيب كبير"}`, or `"product": null`
+for something the catalog does not have. See `docs/experiment-log.md` for what has been
+measured so far and how little of it is real invoices.
 
 Everything is normalized first (`string_matching/normalization.py`): Arabic-Indic digits
 folded to ASCII, diacritics and tatweel removed, أ/إ/آ→ا, ى→ي, ة→ه, punctuation stripped,

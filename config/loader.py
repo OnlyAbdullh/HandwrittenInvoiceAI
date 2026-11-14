@@ -59,6 +59,10 @@ def anchor_paths(config: AppConfig, root: Path = PROJECT_ROOT) -> AppConfig:
     if not dictionary.is_absolute():
         config.string_matching.dictionary_path = str(root / dictionary)
 
+    vocabulary = Path(config.string_matching.product_vocabulary_path)
+    if not vocabulary.is_absolute():
+        config.string_matching.product_vocabulary_path = str(root / vocabulary)
+
     output_dir = config.persistence.store_params.get("output_dir")
     if output_dir and not Path(output_dir).is_absolute():
         config.persistence.store_params["output_dir"] = str(root / output_dir)

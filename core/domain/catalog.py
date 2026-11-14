@@ -23,6 +23,7 @@ lives here.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Protocol, Sequence, runtime_checkable
 
 from string_matching.algorithms import DEFAULT_TOP_K, ScoredCandidate
@@ -73,12 +74,45 @@ class NamedEntry:
         return result
 
 
+class MatchOutcome(str, Enum):
+    """What kind of answer a product match is, beyond how well it scored.
+
+    A product catalog is full of siblings -- the same trousers in three size
+    ranges, the same shirt from two suppliers -- so "the closest name scored
+    0.8" does not say whether the closest name is the product. These are the
+    four things it can mean. Only the first is safe to accept unseen; the
+    scores on the wire are adjusted so that crossing the review threshold means
+    exactly that (see :mod:`string_matching.product_matchers.coverage_matcher`).
+    """
+
+    # Every written word is explained by the entry and every word of the entry
+    # was written, numbers exactly.
+    FULL_MATCH = "full_match"
+
+    # Every written word is explained, the entry has words that were not
+    # written, and it is the only entry that fits: a shortened name.
+    SHORTHAND_UNIQUE = "shorthand_unique"
+
+    # Several entries fit what was written equally well. The text cannot
+    # choose between them; a person, or the history of what this customer
+    # buys, can.
+    AMBIGUOUS = "ambiguous"
+
+    # A written word matches nothing in the best entry: a misreading too heavy
+    # to see through, or a product the catalog does not have.
+    UNEXPLAINED = "unexplained"
+
+
 @dataclass(frozen=True)
 class FieldMatch:
     """The ranked answer for one field, ready to be put on the wire."""
 
     ocr_raw_text: str
     candidates: list[ScoredCandidate]
+
+    # Set by matchers that classify their answer (product matching does);
+    # None for the ones that only rank. Recorded in the audit trail, not sent.
+    outcome: MatchOutcome | None = None
 
     @property
     def best(self) -> ScoredCandidate | None:

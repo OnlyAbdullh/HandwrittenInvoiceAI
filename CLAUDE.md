@@ -68,6 +68,11 @@ python tools/evaluate.py --config config/default_config.yaml --label x      # wh
 python tools/evaluate.py --perfect-readings datasets/a datasets/b           # same, every cell read as its label (no model)
 python tools/compare_pipelines.py                                           # all reading approaches, ranked
 
+# Product matching: no model runs, so these take seconds to minutes and repeat exactly
+python tools/check_catalog.py keywords.xlsx                                 # what in a catalog will make matching harder
+python tools/evaluate_matching.py --catalog keywords.xlsx --readings labelled.jsonl   # matchers compared on labelled readings
+python tools/evaluate_matching.py --catalog keywords.xlsx --simulate        # ... on simulated readings, full and shortened
+
 # Tests
 pytest
 pytest tests/test_invoice_parser.py               # one file
@@ -310,20 +315,67 @@ The packages beside it hold *behaviour* only — `invoice/` parses, `string_matc
 matches, `table_extraction/` detects and classifies. `core/interfaces/` holds the Protocol
 each pluggable family implements.
 
-### String matching (two algorithms, because names fail two different ways)
+### String matching (names fail in different ways)
 
 | Field | Algorithm | Why |
 |---|---|---|
 | Merchant, city, governorate | Normalized Levenshtein over the whole string | Wrong one letter at a time. |
-| Product name | Order-independent word matching | Words are usually right, order isn't — "جاكيت صوف أزرق" vs "جاكيت أزرق صوف" is the same product; each OCR word takes its best score against catalog words, divided by the larger word count. |
+| Product name | `coverage` product matcher: order-independent word coverage, then an evidence check | Word order varies, writers shorten names, and the catalog is full of siblings (below). |
 
-Both return the **top five** matches ranked highest-first, never a single answer. A matched
-field on the wire carries **no value at all** — only `original_value`, which is always the
-raw OCR text, and `results`, the ranked list. Applying the **0.75** threshold to that list
-is the desktop app's job, done in exactly one place (`ExtractionMapper`). This side reports
-the scores and decides nothing: a wrong *confident* match silently corrupts an invoice, and
-a shape that carries both a value and a candidate list cannot say which of the two the
-value was.
+Both return the top matches ranked highest-first (`max_candidates`, default five), never a
+single answer. A matched field on the wire carries **no value at all** — only
+`original_value`, which is always the raw OCR text, and `results`, the ranked list. Applying
+the **0.75** threshold to that list is the desktop app's job, done in exactly one place
+(`ExtractionMapper`): a wrong *confident* match silently corrupts an invoice, and a shape
+that carries both a value and a candidate list cannot say which of the two the value was.
+
+#### Product matching (`string_matching/product_matchers/`)
+
+A third registered family (`product_matcher_registry`), selected by
+`string_matching.product_matcher` and built by `build_product_matcher`; the orchestrator
+hands it to `InvoiceParser`. It is separate from the keyword `StringMatcher` because it
+matches *records* and classifies its answer.
+
+The real catalog (341 menswear products) is why a similarity score alone is not enough:
+226 of its names have another name scoring ≥ 0.75 against them — the same trousers in the
+next size range, the same shirt from another supplier — and writers shorten names. So
+`coverage` does two separate things:
+
+1. **Ranks** by how much of the *written* text an entry explains, blended with the original
+   score (`coverage_weight`, 0.7). Dividing by the larger word count, as the original
+   matcher does, put short unrelated products above the long product a shorthand meant.
+2. **Decides** with an evidence check on the top entry, giving a `MatchOutcome`:
+   `full_match` (every written word explained, every word of the name written, numbers
+   exactly), `shorthand_unique` (a shortened name only one product fits), `ambiguous`
+   (several fit), `unexplained` (a written word no word of the entry explains).
+
+**There is no outcome on the wire**, so the scores are adjusted to carry it: the top score
+reaches 0.75 only for a full match, and is scaled below it otherwise (`_report`). A
+shorthand that fits one product is ranked first and still sent to review — its wrong-accept
+rate has not been measured on real invoices.
+
+Supporting pieces:
+
+- `string_matching/tokenization.py` — separates digits from letters (`4سم`,
+  `38/48ماركة`). Numbers are compared like words for ranking and must be exact to count as
+  read.
+- `string_matching/product_vocabulary.py` + `keywords/product_vocabulary.json`
+  (server-owned) — word variants (`بنطلون` = `بنطال`) and inactive markers (`الغاء`:
+  cancelled rows never match). A written word is compared with **every** spelling of a
+  catalog word; it is not rewritten to the canonical one (see Traps).
+- `string_matching/product_index.py` — the catalog compiled once per distinct catalog
+  (it arrives with every request), cached.
+- `word_overlap` — the original matcher, kept as the measured baseline and the rollback.
+
+**History is not needed and has a place.** A reading the user confirmed for a product is
+one more name the product answers to: every name of an entry competes, so once the app
+sends confirmed readings as a product's aliases they match in full with no change here
+(`known_products` has no `aliases` field yet — a contract change on both sides). Signals
+that reorder an ambiguous group (the customer's history, a product's usual price) belong
+between `_rank` and `_decide`.
+
+Measured in `docs/experiment-log.md` (2026-11-14). Almost all of it is simulated readings;
+re-measure with `tools/evaluate_matching.py` when invoices with real shorthand are labelled.
 
 Normalization (`string_matching/normalization.py`) runs before any comparison: Arabic-Indic
 digits → ASCII, diacritics/tatweel stripped, أ/إ/آ→ا, ى→ي, ة→ه, punctuation stripped,
@@ -425,6 +477,18 @@ totals-strip box is narrowed to the figures (`field_insets`). Look at the crops
 counts only strokes (rules removed, pieces ≥ 20% of the cell height, capped at 14 px):
 counting every ink pixel made the dotted rule in each shifted empty row a phantom row. Re-record `tests/fixtures/form_*_cells.json`
 with `tools/record_layout_fixture.py` after changing any geometric step.
+
+**Folding a written word to its canonical spelling loses misreadings.** The first version
+of the product vocabulary rewrote both sides to one spelling. `نطلون` (a real reading) is
+one letter from `بنطلون` and three from `بنطال`, so a nearly-right reading scored as
+nearly wrong and the product fell out of first place. Catalog words are stored canonical;
+written words are compared against every spelling.
+
+**Joining split words must be a choice, not a bonus.** The recognizers split a word in two
+about once in ten, so adjacent written words are also tried joined. Letting each written
+word take the better of its own score and the joined pair's made a name holding `براشوت`
+explain the word after it too — `براشوت` + `طون` still resembles `براشوت` — and a hat
+outranked the product. `_best_reading` picks one reading per name: joined or apart.
 
 **Every pixel threshold assumes a ~2000 px photo.** The geometric and layout
 stages were tuned on photos with a 2000 px long side; a full-size phone photo

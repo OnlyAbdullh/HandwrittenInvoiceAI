@@ -32,7 +32,7 @@ from orchestration.page_debug import PageDebugWriter
 from output.factory import build_output_formatter
 from persistence.file_result_store import FileResultStore
 from preprocessing.pipeline_builder import PreprocessingPipelineBuilder
-from string_matching.factory import build_string_matcher
+from string_matching.factory import build_product_matcher, build_string_matcher
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,9 @@ class PipelineOrchestrator:
         self.debug_page_dir = config.debug_dir
         self.string_matcher = build_string_matcher(config.string_matching)
         self.output_formatter = build_output_formatter(config.output)
-        self.invoice_parser = InvoiceParser()
+        self.invoice_parser = InvoiceParser(
+            product_matcher=build_product_matcher(config.string_matching)
+        )
         self.result_store = FileResultStore(**config.persistence.store_params)
 
         self.keyword_dictionary = self._load_keyword_dictionary(

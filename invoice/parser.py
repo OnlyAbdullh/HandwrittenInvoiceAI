@@ -38,7 +38,13 @@ from core.domain.roles import CellRole
 from core.domain.text_lines import TextLine, Word
 from invoice.text_lines import group_lines
 from string_matching.algorithms import DEFAULT_TOP_K
-from string_matching.catalog import Catalogs, match_city, match_merchant, match_product
+from core.interfaces.product_matcher import ProductMatcher
+from string_matching.catalog import (
+    Catalogs,
+    default_product_matcher,
+    match_city,
+    match_merchant,
+)
 from string_matching.normalization import (
     format_date,
     normalize_quantity,
@@ -89,7 +95,16 @@ _TOTAL_TOLERANCE = 0.05
 
 
 class InvoiceParser:
-    """Reads an invoice out of a StructuredDocument. Stateless and reusable."""
+    """Reads an invoice out of a StructuredDocument. Stateless and reusable.
+
+    `product_matcher` is how a line item's name is matched against the
+    request's product catalog. The orchestrator passes the configured one,
+    built with this machine's product vocabulary; left out, the default
+    matcher with no vocabulary is used.
+    """
+
+    def __init__(self, product_matcher: ProductMatcher | None = None):
+        self._product_matcher = product_matcher or default_product_matcher()
 
     def parse(
         self,
@@ -287,7 +302,7 @@ class InvoiceParser:
 
         if product is not None and product_text:
             item.product_name = ExtractedValue.from_match(
-                match_product(product_text, catalogs.products, catalogs.top_k),
+                self._product_matcher.match(product_text, catalogs.products, catalogs.top_k),
                 fallback_text=product_text,
                 confidence=_cell_confidence([product]),
                 bbox=product.bbox,
@@ -482,7 +497,9 @@ class InvoiceParser:
         item = InvoiceLineItem(row_index=row_index)
 
         item.product_name = ExtractedValue.from_match(
-            match_product(product_cell.merged_text, catalogs.products, catalogs.top_k),
+            self._product_matcher.match(
+                product_cell.merged_text, catalogs.products, catalogs.top_k
+            ),
             fallback_text=product_cell.merged_text,
             confidence=_cell_confidence([product_cell]),
             bbox=product_cell.bbox,
@@ -549,7 +566,7 @@ class InvoiceParser:
         item = InvoiceLineItem(row_index=row_index)
 
         item.product_name = ExtractedValue.from_match(
-            match_product(product_text, catalogs.products, catalogs.top_k),
+            self._product_matcher.match(product_text, catalogs.products, catalogs.top_k),
             fallback_text=product_text,
             confidence=line.confidence,
             bbox=_words_bbox(name_words),

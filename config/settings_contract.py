@@ -107,6 +107,18 @@ def enforce_server_owned(config: AppConfig, server: AppConfig) -> list[str]:
         overridden.append("string_matching.dictionary_path")
     config.string_matching.dictionary_path = server.string_matching.dictionary_path
 
+    # Product matching is not on the settings page: which matcher runs was
+    # chosen by measurement, and the vocabulary is a file on this machine. Not
+    # reported as overridden -- a client that predates these fields sends none,
+    # and the schema defaults it gets instead are not something it asked for.
+    config.string_matching.product_matcher = server.string_matching.product_matcher
+    config.string_matching.product_matcher_params = dict(
+        server.string_matching.product_matcher_params
+    )
+    config.string_matching.product_vocabulary_path = (
+        server.string_matching.product_vocabulary_path
+    )
+
     # Every pixel threshold the request may tune assumes this resolution; it is
     # not on the settings page, and the server's own value is the one tuned.
     config.preprocessing.working_long_side = server.preprocessing.working_long_side
