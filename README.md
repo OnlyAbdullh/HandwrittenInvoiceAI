@@ -202,11 +202,25 @@ python tools/evaluate.py --config config/qwen_config.yaml --label my-change
 
 scores the pipeline against hand-labelled invoices (`evaluation/ground_truth/*.json`,
 image paths relative to `bills/`) and writes a report under `evaluation/reports/`. Run it
-before and after any change meant to improve accuracy. Only two invoices are labelled so
-far, so treat the numbers as anecdotal and **label more**: copy `sahror.json`, transcribe
-the paper (values exactly as written, ISO dates, plain numbers), and check that the line
-totals sum to the invoice total. `tools/export_crops.py` will turn labelled invoices
-into a cell-crop dataset for fine-tuning the recognizer.
+before and after any change meant to improve accuracy. Only three invoices are labelled so
+far, so treat the numbers as anecdotal and **label more**.
+
+#### Labelling invoices
+
+Copy `evaluation/ground_truth/abd.json`, put the photo under `bills/<name>/`, and
+transcribe the paper: ISO dates, names as the catalog spells them, and **decimal numbers as
+strings exactly as written** (`"unit_price": "5,70"`, typed in 0-9; a JSON number cannot
+keep the written zero, and the string is what the cell's crop is labelled with). Give
+`writer` when you know who filled the invoice in. Check that every row multiplies out and
+the line totals sum to the invoice total.
+
+#### Fine-tuning the recognizer
+
+[docs/fine-tuning.md](docs/fine-tuning.md): labelled invoices → `tools/build_finetune_dataset.py`
+→ `tools/finetune_recognizer.py` (a 20 MB adapter beside the base model) →
+`tools/evaluate.py --held-out` against the base model. The tooling runs today; a few
+hundred labelled cells from several writers are needed before a fine-tune is more than
+memorization.
 
 ### Choosing a model: comparing everything in `OCR_Models/`
 

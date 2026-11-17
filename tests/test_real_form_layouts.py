@@ -59,6 +59,22 @@ def role_at(layout, x: int, y: int) -> CellRole:
     return hits[0].role
 
 
+def contains(box: BoundingBox, x: int, y: int) -> bool:
+    return box.x <= x <= box.x + box.w and box.y <= y <= box.y + box.h
+
+
+def figures_box(layout) -> BoundingBox:
+    """Form B's written total: the one region read as the invoice total."""
+    totals = layout.with_role(CellRole.TOTAL_AMOUNT)
+    assert len(totals) == 1
+    return totals[0].bbox
+
+
+def strip_box(layout) -> BoundingBox:
+    """Form B's totals strip as the extractor found it: the widest caption box."""
+    return max((r.bbox for r in layout.with_role(CellRole.LABEL)), key=lambda b: b.w)
+
+
 @pytest.fixture(scope="module")
 def form_a():
     table, size = load_fixture("form_a_cells.json")
@@ -133,9 +149,10 @@ class TestFormProfiles:
         assert role_at(layout, 478, 465) is CellRole.QUANTITY
         assert role_at(layout, 859, 471) is CellRole.PRODUCT_NAME
         assert role_at(layout, 1267, 479) is CellRole.LINE_TOTAL
-        # The handwritten sum: the wide box of the totals strip ("المجموع"),
-        # not the small empty box beside it.
-        assert role_at(layout, 680, 1650) is CellRole.TOTAL_AMOUNT
+        # The handwritten sum, on the totals strip ("المجموع"): one declared
+        # field holding the figures, with the strip's own box a caption.
+        assert figures_box(layout).center_in(strip_box(layout))
+        assert contains(figures_box(layout), 680, 1650)
 
     def test_the_printed_caption_row_of_form_b_is_a_header_not_an_item(self, two_form_classifier):
         """With the page kept around the table, the caption row (Price |
@@ -192,7 +209,8 @@ class TestGridCompletion:
         # Inferred boxes are marked, so a render or a log can tell them apart.
         assert 0 < sum(r.id.endswith("s") for r in layout.regions) <= 4
         # The totals strip is still the totals strip, not a sixteenth item.
-        assert role_at(layout, 680, 1650) is CellRole.TOTAL_AMOUNT
+        assert contains(figures_box(layout), 680, 1650)
+        assert contains(strip_box(layout), 680, 1650)
 
     def test_every_item_row_has_one_row_number(self, two_form_classifier):
         table, size = load_fixture("form_b_cells.json")
@@ -295,15 +313,45 @@ class TestFormBCropPlacement:
             assert region.bbox.y - before[region.id].y == round(0.25 * region.bbox.h)
 
     def test_the_total_is_cropped_to_the_figures_not_the_whole_strip(self, two_form_classifier):
-        plain, configured = self._layouts(two_form_classifier)
-        strip = plain.with_role(CellRole.TOTAL_AMOUNT)[0].bbox
-        figures = configured.with_role(CellRole.TOTAL_AMOUNT)[0].bbox
-        assert figures.x == strip.x + round(0.22 * strip.w)
-        assert figures.x + figures.w == strip.x + round(0.84 * strip.w)
-        assert figures.y + figures.h == strip.y + strip.h
+        _, configured = self._layouts(two_form_classifier)
+        strip, figures = strip_box(configured), figures_box(configured)
         # "المجموع" (right) and "فقط لا غير" (left) are outside the crop.
         assert figures.x + figures.w < strip.x + strip.w - 100
         assert figures.x > strip.x + 100
+        # Below the last item row, and not past the strip's own bottom rule.
+        last_row_bottom = max(r.bbox.y + r.bbox.h for r in configured.with_role(CellRole.LINE_TOTAL))
+        assert figures.y > last_row_bottom - 30
+        assert figures.y + figures.h <= strip.y + strip.h
+
+    def test_the_strip_itself_is_never_read(self, two_form_classifier):
+        """The figures are read once, from the declared field. The strip's box
+        holds them too, with both captions: labelled a caption, it is skipped."""
+        from orchestration.flows.layout_driven import SKIPPED_ROLES
+
+        _, configured = self._layouts(two_form_classifier)
+        covering = [
+            r for r in configured.regions
+            if contains(r.bbox, 680, 1650) and r.role not in SKIPPED_ROLES
+        ]
+        assert [r.role for r in covering] == [CellRole.TOTAL_AMOUNT]
+
+    def test_a_box_can_be_cut_to_the_part_that_holds_the_writing(self):
+        """`field_insets`, for a form that prints a caption inside a ruled box."""
+        table, size = load_fixture("form_b_cells.json")
+        params = dict(
+            table_row_count=15, table_col_count=4,
+            column_roles=["unit_price", "quantity", "product_name", "line_total"],
+            header_roles=[], footer_roles=["total_amount", "label"],
+            printed_header_row=True, ragged_row_slack=1, complete_grid=True,
+        )
+        strip = BillLayoutClassifier(**params).classify(table, size).with_role(CellRole.TOTAL_AMOUNT)[0].bbox
+        cut = BillLayoutClassifier(
+            **params, field_insets={"total_amount": {"x": [0.22, 0.84], "y": [0.18, 1.0]}}
+        ).classify(table, size).with_role(CellRole.TOTAL_AMOUNT)[0].bbox
+
+        assert cut.x == strip.x + round(0.22 * strip.w)
+        assert cut.x + cut.w == strip.x + round(0.84 * strip.w)
+        assert cut.y + cut.h == strip.y + strip.h
 
     def test_the_date_crop_does_not_reach_the_invoice_number_line(self, two_form_classifier):
         _, configured = self._layouts(two_form_classifier)
@@ -327,3 +375,71 @@ class TestFieldInsetConfig:
     def test_an_unknown_role_fails(self):
         with pytest.raises(ValueError):
             BillLayoutClassifier(field_insets={"no_such_role": {"x": [0.1, 0.9]}})
+
+
+class TestSecondPhotoOfFormB:
+    """bills/abd: the same printed form, another writer, photographed at an
+    angle on a phone. Before the geometric and classifier fixes of 2026-11-16
+    it scored 4 fields of 20.
+
+    What this photo has that the first does not: the caption row is printed a
+    few pixels clear of the item rows, so it is **outside** the detected table
+    outline, and the totals strip is inside it. Anything measured from that
+    outline was a row out.
+    """
+
+    ITEM_ROLES = (CellRole.UNIT_PRICE, CellRole.QUANTITY, CellRole.PRODUCT_NAME, CellRole.LINE_TOTAL)
+
+    @pytest.fixture(scope="class")
+    def layout(self, two_form_classifier):
+        table, size = load_fixture("form_b_second_photo_cells.json")
+        return two_form_classifier.classify(table, size)
+
+    def test_it_is_recognised_as_form_b(self, layout):
+        assert layout.source.endswith("[form_b_bilingual]")
+
+    def test_the_caption_row_above_the_outline_is_the_header(self, layout):
+        captions = layout.with_role(CellRole.COLUMN_HEADER)
+        assert len(captions) == 4
+        for caption in captions:
+            assert caption.bbox.y + caption.bbox.h / 2 < layout.table_bbox.y  # outside the outline
+            assert caption.zone is Zone.TABLE  # and still part of the table
+
+    def test_the_first_written_row_is_the_first_item_not_the_header(self, layout):
+        captions_bottom = max(r.bbox.y + r.bbox.h for r in layout.with_role(CellRole.COLUMN_HEADER))
+        for role in self.ITEM_ROLES:
+            cells = sorted(layout.with_role(role), key=lambda r: r.bbox.y)
+            assert len(cells) == 15, role
+            # The first item row starts where the caption row ends, not a row lower.
+            first_top = cells[0].bbox.y - round(0.25 * cells[0].bbox.h)  # undo item_vertical_shift
+            assert abs(first_top - captions_bottom) < 0.3 * cells[0].bbox.h, role
+
+    def test_every_item_row_has_one_row_number(self, layout):
+        rows = {}
+        for region in layout.regions:
+            if region.role in self.ITEM_ROLES:
+                rows.setdefault(region.row, []).append(region.role)
+        assert len(rows) == 15 and all(len(roles) == 4 for roles in rows.values())
+
+    def test_the_totals_strip_is_not_a_sixteenth_item(self, layout):
+        last_row_bottom = max(r.bbox.y + r.bbox.h for r in layout.with_role(CellRole.LINE_TOTAL))
+        assert figures_box(layout).y > last_row_bottom - 30
+        assert layout.with_role(CellRole.TOTAL_AMOUNT)[0].zone is Zone.FOOTER
+
+    def test_the_unruled_fields_sit_where_they_do_on_the_first_photo(self, two_form_classifier, layout):
+        """One set of fractions, two photos: each field's place relative to the
+        item rows must agree, or the fractions fit one photo only."""
+        table, size = load_fixture("form_b_cells.json")
+        first = two_form_classifier.classify(table, size)
+
+        def relative(page, role):
+            items = [r.bbox for r in page.regions if r.role in self.ITEM_ROLES]
+            left, top = min(b.x for b in items), min(b.y for b in items)
+            width = max(b.x + b.w for b in items) - left
+            height = max(b.y + b.h for b in items) - top
+            box = page.with_role(role)[0].bbox
+            return ((box.x - left) / width, (box.y - top) / height, box.w / width, box.h / height)
+
+        for role in (CellRole.INVOICE_NUMBER, CellRole.MERCHANT_NAME, CellRole.INVOICE_DATE, CellRole.TOTAL_AMOUNT):
+            for a, b in zip(relative(first, role), relative(layout, role)):
+                assert abs(a - b) < 0.03, role

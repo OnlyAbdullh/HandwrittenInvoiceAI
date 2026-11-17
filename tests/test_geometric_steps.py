@@ -119,6 +119,111 @@ class TestPerspectiveCorrection:
             PerspectiveCorrectionStep().apply(context(np.zeros((0, 0, 3), np.uint8)))
 
 
+def photographed_at_an_angle() -> tuple[np.ndarray, np.ndarray]:
+    """A white page with one ruled line near its top, on a dark desk, seen
+    from one side: a trapezoid, its top edge sloping about four
+    degrees. Returns the photo and the page's corners (top-left, top-right,
+    bottom-right, bottom-left)."""
+    flat = blank(1100, 800)
+    cv2.line(flat, (0, 110), (799, 110), (0, 0, 0), 5)
+    corners = np.array([[120, 220], [900, 160], [930, 1300], [90, 1240]], dtype=np.float32)
+    flat_corners = np.array([[0, 0], [799, 0], [799, 1099], [0, 1099]], dtype=np.float32)
+    photo = cv2.warpPerspective(
+        flat, cv2.getPerspectiveTransform(flat_corners, corners), (1000, 1400),
+        borderMode=cv2.BORDER_CONSTANT, borderValue=(60, 60, 60),
+    )
+    return photo, corners
+
+
+class TestPerspectiveIsRemoved:
+    """A page photographed from an angle is a trapezoid, not a rotated
+    rectangle. Fitted with a rectangle it stayed a trapezoid: on a real photo
+    (bills/abd) the table's top rule still sloped four degrees after this step,
+    the grid finder lost the rows under it, and every header field was then
+    read from the wrong place."""
+
+    @staticmethod
+    def _desk_in_corners(page: np.ndarray, inset: int = 12) -> int:
+        """How many of the page's four corners still show the dark desk."""
+        gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
+        height, width = gray.shape
+        points = [(inset, inset), (inset, width - inset), (height - inset, inset), (height - inset, width - inset)]
+        return sum(int(gray[y, x] < 128) for y, x in points)
+
+    def test_the_four_corners_of_the_page_become_the_corners_of_the_image(self):
+        photo, _ = photographed_at_an_angle()
+        result = PerspectiveCorrectionStep(margin=0.0).apply(context(photo))
+
+        assert result.payload.metadata["perspective_correction"]["fit"] == "quadrilateral"
+        assert self._desk_in_corners(result.payload.image) == 0
+
+    def test_a_rectangle_fit_leaves_the_trapezoid(self):
+        """The old behaviour, kept selectable so the difference stays measurable."""
+        photo, _ = photographed_at_an_angle()
+        result = PerspectiveCorrectionStep(margin=0.0, fit="rectangle").apply(context(photo))
+
+        assert result.payload.metadata["perspective_correction"]["fit"] == "rectangle"
+        assert self._desk_in_corners(result.payload.image) >= 2
+
+    def test_a_ruled_line_across_the_page_comes_out_level(self):
+        photo, _ = photographed_at_an_angle()
+
+        def slope_of_the_rule(fit: str) -> float:
+            page = PerspectiveCorrectionStep(margin=0.0, fit=fit).apply(context(photo.copy())).payload.image
+            gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
+            height, width = gray.shape
+            band = gray[: int(0.3 * height)]
+
+            def rule_y(x: int) -> float:
+                # Black, not merely dark: the desk shows in a rectangle fit's corners.
+                return float(np.mean(np.nonzero(band[:, x] < 35)[0]))
+
+            return abs(rule_y(int(0.15 * width)) - rule_y(int(0.85 * width)))
+
+        assert slope_of_the_rule("quadrilateral") <= 3
+        assert slope_of_the_rule("rectangle") >= 15
+
+    def test_the_transform_maps_the_photo_onto_the_page(self):
+        """Every bbox the pipeline reports is in the corrected page's space, so
+        the recorded transform has to be the warp that was applied."""
+        photo, corners = photographed_at_an_angle()
+        result = PerspectiveCorrectionStep(margin=0.1).apply(context(photo))
+        height, width = result.payload.image.shape[:2]
+
+        x, y = result.payload.transform.apply_to_point(float(corners[0][0]), float(corners[0][1]))
+        # The page's top-left corner lands one margin in from the image's.
+        assert abs(x - width * 0.1 / 1.2) <= 6
+        assert abs(y - height * 0.1 / 1.2) <= 6
+
+    def test_an_outline_that_is_not_four_sided_falls_back_to_the_rectangle(self):
+        photo = blank(1400, 1000, value=60)
+        cv2.circle(photo, (500, 700), 420, (255, 255, 255), -1)
+
+        result = PerspectiveCorrectionStep(margin=0.0).apply(context(photo))
+
+        assert result.payload.metadata["perspective_correction"]["fit"] == "rectangle"
+
+    def test_an_unknown_fit_is_rejected(self):
+        with pytest.raises(ValueError):
+            PerspectiveCorrectionStep(fit="triangle")
+
+    def test_nothing_is_drawn_beyond_the_edge_of_the_photo(self):
+        """The margin reaches past the photo when the page fills it. The
+        photo's border used to be stretched across that margin, so print cut
+        by the edge became straight dark streaks; the grid finder closed boxes
+        between them and the classifier read them as the totals strip."""
+        photo = blank(1400, 1000, value=250)
+        cv2.rectangle(photo, (40, 60), (960, 1340), (0, 0, 0), 4)  # the outline that is found
+        for x in range(200, 800, 60):  # print the photo's bottom edge cuts through
+            cv2.line(photo, (x, 1360), (x, 1399), (0, 0, 0), 8)
+
+        page = PerspectiveCorrectionStep(margin=0.15).apply(context(photo)).payload.image
+        gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY).astype(int)
+
+        beyond = gray[-40]  # a row well past the photo's bottom edge
+        assert np.abs(np.diff(beyond)).max() < 40
+
+
 class TestDeskew:
     def test_straightens_a_rotated_page(self):
         page = blank(800, 800)

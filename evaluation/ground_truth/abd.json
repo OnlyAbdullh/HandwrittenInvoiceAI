@@ -1,0 +1,17 @@
+{
+  "image": "abd/photo_2026-11-14_15-50-52.jpg",
+  "form": "form_b_bilingual",
+  "invoice_number": "0001902",
+  "customer_name": "عبد الله الكسم",
+  "date": "2026-09-25",
+  "city": null,
+  "total": "5389,8",
+  "items": [
+    {"product_name": "فراري محير أزرق ذمة", "quantity": 216, "unit_price": 5, "total_price": 1080},
+    {"product_name": "فراري محير أسود ذمة", "quantity": 640, "unit_price": 5, "total_price": 3200},
+    {"product_name": "بورش أزرق ولادي", "quantity": 193, "unit_price": "3,40", "total_price": "656,2"},
+    {"product_name": "بورش فضي ولادي", "quantity": 144, "unit_price": "3,15", "total_price": "453,6"}
+  ],
+  "labelled_by": "transcribed by eye from the photograph (by Claude, 2026-11-16); not yet confirmed by the invoice's writer",
+  "notes": "Every row satisfies quantity x unit price = line total, and the four line totals sum to the invoice total, which cross-checks every number. The form has no city box. The invoice number is printed in red and its first 0 is only half printed. The customer and product names are handwriting and are spelled here as read from the paper; none of the four products is in keywords.xlsx under these words, so the names should be confirmed by someone who knows the catalog."
+}

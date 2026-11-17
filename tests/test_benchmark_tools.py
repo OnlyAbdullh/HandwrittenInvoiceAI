@@ -440,7 +440,10 @@ def test_evaluate_prints_arabic_and_symbols_through_a_cp1252_pipe(monkeypatch):
     import sys
 
     evaluate = _load("evaluate")
-    out = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    # newline="\n": what is under test is the encoding. Left to its default,
+    # the wrapper writes "\r\n" on Windows and the comparison below fails there
+    # for a reason that has nothing to do with it.
+    out = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", newline="\n")
     monkeypatch.setattr(sys, "stdout", out)
     evaluate.utf8_console()
     print("≥ 0.75 أبو جمال")

@@ -44,6 +44,14 @@ customer, date and most of the totals strip were cut away before anything was re
 A request that omits `margin` gets the default. A settings page that sends `0`
 restores the old crop and loses those fields again.
 
+`perspective_correction.params.fit` (`quadrilateral`, the default, or `rectangle`)
+chooses what is fitted to that outline. `quadrilateral` warps its four corners, which
+removes perspective; an outline that is not four-sided falls back to its rotated
+bounding rectangle. `rectangle` is the behaviour before 2026-11-17: it only undoes
+rotation, and a page photographed from an angle stays a trapezoid. A request that
+omits `fit` gets `quadrilateral`; the desktop app needs no change unless it wants to
+expose the choice.
+
 Before `perspective_correction`, the service shrinks any photo whose long side is
 larger than `preprocessing.working_long_side` (default 2000 px) to that size. Every
 pixel threshold above was tuned at that size; a full-size phone photo read without

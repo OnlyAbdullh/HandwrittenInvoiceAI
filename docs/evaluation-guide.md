@@ -22,11 +22,14 @@ A truth file is a transcription of one real photograph:
 
 - values exactly as written;
 - dates in ISO format;
-- plain numbers.
+- whole numbers as numbers, and decimal numbers as strings exactly as written
+  (`"unit_price": "5,70"`, typed in 0-9). The value is the same for scoring;
+  the string is what the cell's crop is labelled with, and a JSON number cannot
+  keep a written zero.
 
 Then check that the line totals add up to the invoice total. Record who wrote
-the invoice in `notes`; it is what makes writer-independent evaluation possible
-later.
+the invoice in `writer` (any stable name or number); it is what keeps a writer's
+invoices in one split when a model is fine-tuned ([fine-tuning.md](fine-tuning.md)).
 
 Never add synthetic or generated images as ground truth.
 
@@ -167,8 +170,30 @@ python tools\evaluate.py --perfect-readings datasets\sahror datasets\onlyone
 This runs the same pipeline, but every cell is "read" as its label from the
 export folders, so no model is loaded. Name each folder like the invoice's folder
 under `bills\`. Whatever is still wrong is the layout, the parser or the
-arithmetic. Run it after any layout or parser change. It reported 100% on both
-invoices at the time of writing.
+arithmetic. Run it after any layout or parser change. It reported 100% on all
+three invoices on 2026-11-17 (61 of 61 fields).
+
+### Not reading a crop twice
+
+```powershell
+python tools\evaluate.py --config config\default_config.yaml --reading-cache evaluation\reading_cache
+```
+
+keeps every reading the model makes on disk. A rerun after a parser change reads
+nothing and does not load the model; after a layout change it reads only the
+crops that moved; a run that was stopped resumes. The key covers the crop's
+pixels, its kind, the recognizer's parameters and the model folder's files.
+Delete the folder after changing a prompt or the decoding policy. Seconds per
+invoice mean nothing in a cached run.
+
+### A fine-tuned model against the base model
+
+```powershell
+python tools\evaluate.py --config config\default_config.yaml --held-out datasets\finetune --label base
+```
+
+scores only the invoices in the test split of a fine-tuning dataset. See
+[fine-tuning.md](fine-tuning.md).
 
 ### CPU vs. GPU
 

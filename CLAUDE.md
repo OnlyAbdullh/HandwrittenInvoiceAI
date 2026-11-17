@@ -66,7 +66,14 @@ qwen_venv/Scripts/python tools/benchmark_recognizers.py --crops datasets/a datas
 python tools/analyze_benchmark.py evaluation/reports/model_benchmark.json   # would combining models help?
 python tools/evaluate.py --config config/default_config.yaml --label x      # whole-invoice accuracy, time, RAM
 python tools/evaluate.py --perfect-readings datasets/a datasets/b           # same, every cell read as its label (no model)
+python tools/evaluate.py --config config/default_config.yaml --reading-cache evaluation/reading_cache   # reads only crops not read before
 python tools/compare_pipelines.py                                           # all reading approaches, ranked
+
+# Fine-tuning the recognizer on labelled invoices -- docs/fine-tuning.md
+python tools/build_finetune_dataset.py                                      # truth files -> datasets/finetune/{train,val,test}.jsonl (no model)
+qwen_venv/Scripts/python tools/finetune_recognizer.py --out OCR_Models/invoice-ft-001   # LoRA adapter; --resume, STOP file
+python tools/evaluate.py --config config/default_config.yaml --held-out datasets/finetune   # the test split's invoices only
+INVOICE_AI_MODEL_DIR=OCR_Models/invoice-ft-001 python -m api.main           # serve with a fine-tuned model
 
 # Product matching: no model runs, so these take seconds to minutes and repeat exactly
 python tools/check_catalog.py keywords.xlsx                                 # what in a catalog will make matching harder
@@ -242,6 +249,26 @@ GBNF grammar. `ocr/llamacpp/` is the llama.cpp half: `gguf.py` (header checks �
 swapped, truncated files fail before anything loads), `server.py` (process lifecycle),
 `client.py` (request/response, confidence).
 
+### Fine-tuned recognizers (`ocr/finetuning/`, `docs/fine-tuning.md`)
+
+A fine-tuned model is a folder holding only a LoRA adapter (`adapter.safetensors`) and
+`finetune.json`, which names its base model. `ocr.recognizer.params.model_path`
+(`INVOICE_AI_MODEL_DIR`) may point at one: `tools/qwen_worker.py` loads the base model and
+adds the adapter into its weights (`lora.merge_into`), after which it is an ordinary model.
+Server-owned; the C# side is unaffected. The `llamacpp` runtime does not read adapters.
+
+The data path is `evaluation/ground_truth/*.json` → `tools/build_finetune_dataset.py` →
+`tools/finetune_recognizer.py` (VLM venv). The rules are in `evaluation/finetune_dataset.py`:
+a label is what the crop shows (digits as the writer wrote them, `EMPTY` for an empty
+cell), the prompt is the service's own, and invoices are split by writer or invoice with a
+hash so a test invoice stays a test invoice. Truth files give decimals as written
+(`"unit_price": "5,70"`, `evaluation/schema.py`). LoRA is implemented here, on torch alone,
+because the VLM venv has no `peft` and must stay installable offline.
+
+`ocr/recognizers/cached_recognizer.py` (`cached`) is a Decorator that keeps every reading
+on disk, keyed by crop pixels, kind and the wrapped recognizer's full specification. It is
+a measurement tool (`tools/evaluate.py --reading-cache`), never part of a shipped config.
+
 ### Combining recognizers: `routed`
 
 `ocr/recognizers/routed_recognizer.py` is a Composite `TextRecognizer`: it builds named
@@ -259,7 +286,8 @@ measured at or below the default. Each member loads its own model, so mind memor
 
 Model choice is evidence-driven: `docs/recognition-research.md` (research + measured
 comparison + decision), `docs/evaluation-guide.md` (how to measure),
-`docs/experiment-log.md` (what was tried). Record new experiments there.
+`docs/experiment-log.md` (what was tried), `docs/fine-tuning.md` (how to tune and how to
+judge a tuned model). Record new experiments there.
 
 ### Configuration: two shapes, one bridge
 
@@ -465,18 +493,54 @@ exactly that to light blue ballpoint; see the measurement in `config/default_con
 When a handwritten field reads badly, compare the crop against the display image before
 touching prompts or models.
 
+**Perspective correction must fit four corners, not a rectangle.** It used to warp the
+outline's `minAreaRect`, which only undoes rotation: a page photographed from an angle
+stayed a trapezoid (opposite sides 6–10% apart on all three real photos). On `bills/abd`
+the table's top rule still sloped 4° afterwards, the grid finder lost the rows under it,
+and the invoice scored 4 fields of 20. `fit: quadrilateral` (the default) warps the
+outline's own corners, each the crossing of lines fitted to two sides, and falls back to
+the rectangle when the outline is not four-sided. The margin beyond the photo's edge is
+blurred: the replicated border drew streaks that closed as boxes.
+
+**The detected table outline is not a reference frame.** It is the largest group of
+touching boxes, so whether it holds the caption row or the totals strip depends on a few
+pixels of gap. Two things used to hang on it and broke on the second photo of form B:
+
+- *Which row is the caption row.* The classifier took the first row of the longest run.
+  It now also counts detected rows one pitch above the run, including rows above the
+  outline (`_complete_rows`); a single box is not a row.
+- *Where unruled fields are.* `unruled_fields` are fractions of the **item grid**
+  (`table_row_count` rows at the measured pitch, `_item_grid`), not of the outline.
+
 **The outline perspective correction finds is not always the page.** On form B (white
 paper on a white cloth) the strongest outline is the table's printed border, and warping
 exactly to it cut away the invoice number, customer, date and the written total before
 anything was read; the "customer" then came back as the column captions. The step keeps a
-`margin` (default 0.15) of the photo around the outline. Form B's dotted-line header fields
-are declared as `unruled_fields` in its profile. Its writing sits on each row's dotted rule,
-so its item boxes are moved down a quarter row (`item_vertical_shift: 0.25`), and its
-totals-strip box is narrowed to the figures (`field_insets`). Look at the crops
+`margin` (default 0.15) of the photo around the outline. Form B's dotted-line fields — the
+invoice number (digits only), customer, date and written total — are declared as
+`unruled_fields` in its profile; its totals strip's own boxes are labelled captions so
+they are not read twice. Its writing sits on each row's dotted rule, so its item boxes are
+moved down a quarter row (`item_vertical_shift: 0.25`). `field_insets` (cut a ruled box to
+the part holding the writing) is still supported and no shipped profile uses it. Look at the crops
 (`tools/export_crops.py`) before blaming the model. The cropper's blank-cell gate
 counts only strokes (rules removed, pieces ≥ 20% of the cell height, capped at 14 px):
-counting every ink pixel made the dotted rule in each shifted empty row a phantom row. Re-record `tests/fixtures/form_*_cells.json`
-with `tools/record_layout_fixture.py` after changing any geometric step.
+counting every ink pixel made the dotted rule in each shifted empty row a phantom row.
+`tests/fixtures/form_b_second_photo_cells.json` is `bills/abd` under the current geometric
+steps; `form_a_cells.json` and `form_b_cells.json` were recorded from other copies of the
+photos under the rectangle fit and are kept as they are (they pin the classifier against
+keystone geometry). Record a new fixture with `tools/record_layout_fixture.py` for a new
+form or photo.
+
+**The recognizer is chaotic at the crop's edge.** Moving form B's date box 4 px fixed one
+photo's date and broke the other's; the same crops a few pixels apart read `١٣٢٥٠` and
+`١٣٦٥.`. After the geometric fix the two older invoices lost 8 fields while every box was
+right (`--perfect-readings`: 61/61). Do not tune boxes or the arithmetic repair to recover
+a number on three invoices; that is what the earlier 38/41 was. Fix the layout until
+`--perfect-readings` is 100%, then fine-tune.
+
+**A training label is what the crop shows.** `5.70` in a truth file is the number 5.7, and
+a crop of ٥,٧٠ labelled `5,7` teaches the model to drop a zero. Type decimals as strings.
+Labels are spelled in the writer's digits, not 0-9 (`evaluation/finetune_dataset.py`).
 
 **Folding a written word to its canonical spelling loses misreadings.** The first version
 of the product vocabulary rewrote both sides to one spelling. `نطلون` (a real reading) is

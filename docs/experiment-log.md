@@ -611,6 +611,100 @@ Report: `evaluation/reports/20261114-product-matching.md` (and `.json`), from
   real shorthand are labelled.
 - **Time:** 19 ms per reading against 50 ms, pure Python, on the laptop.
 
+### 2026-11-16 · Third invoice (`abd`) labelled; the default measured on all three
+
+Report: `evaluation/reports/20261116-211708-default_config-three-invoices.md`.
+
+- **Data:** `sahror`, `onlyone`, and the new `bills/abd` (form B, another
+  transaction, a 1920×2560 phone photo). Its truth file was transcribed by eye;
+  every number is cross-checked by `price × qty = total` and the sum. Its
+  customer and four product names were added to `evaluation/catalog.json` as
+  written on the paper; they are not confirmed by the writer.
+- **Where:** laptop, `default_config.yaml` unchanged, Qwen3.5 on CUDA.
+- **Result** (header fields + numeric cells + product top-1):
+
+  | Invoice | Header | Numbers | Product top-1 | All fields |
+  |---|---|---|---|---|
+  | `sahror` (form A) | 5/5 | 12/12 | 4/4 | 21/21 (100%) |
+  | `onlyone` (form B) | 3/4 | 10/12 | 4/4 | 17/20 (85%) |
+  | `abd` (form B) | 0/4 | 2/12 | 2/4 | 4/20 (20%) |
+  | **All three** | 8/13 | 24/36 | 10/12 | **42/61 (69%)** |
+
+  `sahror` and `onlyone` are field for field what they were on 2026-11-11.
+- **Why `abd` fails:** the layout, not the recognizer (`tools/render_layout.py`).
+  The detected table outline starts one row low: the printed caption row is
+  outside it, so the first handwritten row is labelled `column_header`. Rows 1
+  and 2 are never read as items; the `unruled_fields` (measured from the outline
+  on `onlyone`) land on the printed captions, so the customer is read as
+  `Description` and the invoice number is blank; the total box sits below the
+  figures. The two rows that were found have the right quantities and products.
+- **Not done:** nothing was changed to fix it; the request was to measure the
+  selected pipeline as it is.
+
+### 2026-11-17 · Layout made right on all three invoices; fine-tuning tooling
+
+Reports: `evaluation/reports/20261117-075341-default_config-after-layout-fixes.md`
+(model) and `20261117-075236-default_config-perfect-readings-after-fixes.md` (no model). Procedure:
+`docs/fine-tuning.md`.
+
+- **Data:** the same three invoices, 61 scored fields. Two are one transaction.
+- **Where:** laptop, `default_config.yaml`, Qwen3.5 on CUDA.
+- **What was wrong on `abd`, in order of cause:**
+  1. `perspective_correction` fitted a rotated rectangle, which cannot remove
+     perspective. Opposite sides of the outline differed by 6 to 10% on all
+     three photos; on `abd` the table's top rule sloped 4° after the step and
+     the grid finder lost the rows under it. It now warps the outline's own
+     four corners (`fit: quadrilateral`, lines fitted to each side), and falls
+     back to the rectangle when the outline is not four-sided.
+  2. The classifier took the first row of the longest run for the caption row.
+     With the caption row outside the detected outline, that was the first
+     item. Detected rows one pitch above the run are now counted, including
+     rows above the outline.
+  3. Form B's unruled fields were measured from the detected outline, which
+     held the caption row and totals strip on one photo and neither on the
+     other. They are now measured from the item grid (15 rows at the measured
+     pitch), and the written total is declared the same way.
+  4. The margin beyond the photo was the photo's border stretched into streaks;
+     boxes closed between them and were labelled the totals strip. It is now
+     blurred flat.
+- **Result:**
+
+  | | sahror | onlyone | abd | All |
+  |---|---|---|---|---|
+  | Before, model | 21/21 | 17/20 | 4/20 | 42/61 |
+  | After, every cell read as its label | 21/21 | 20/20 | 20/20 | **61/61** |
+  | After, model | 16/21 | 14/20 | 11/20 | 41/61 |
+
+- **Reading it:**
+  - Layout, parsing and arithmetic now lose nothing on these photos. Every
+    remaining error is a misreading.
+  - The model's total did not move, and `sahror` and `onlyone` lost 8 fields
+    between them. Their crops changed by a few pixels and the model read them
+    differently (`١٣٢٥٠` as `١٣٦٥.`, `٢٠٠` as `٥٠`). The earlier 38/41 leaned
+    on repair rules written from those exact misreadings; `abd`, which no rule
+    was written from, is at 11/20. The honest estimate for a new invoice of a
+    known form is 55-75% of fields, not 93%.
+  - Not fixed by moving boxes: narrowing form B's date box by 4 px fixed one
+    photo's date and broke the other's. Form B's invoice number comes back
+    empty on both: its first printed `0` is half printed and read as `)`, and
+    the reading is rejected whole.
+- **Fine-tuning tooling** (`tools/build_finetune_dataset.py`,
+  `tools/finetune_recognizer.py`, `ocr/finetuning/lora.py`):
+  - smoke test only, 20 cells, 2 epochs, 40 s per epoch on the 4 GB GPU; the
+    adapter is 20 MB and the worker loads it (`added into 150 layer(s)`);
+  - with labels in 0-9 the loss started at 2.37 and the tuned model read 15/41
+    on the two held-out invoices against 30/41; with labels in the written
+    digits it started at 1.02. Labels follow the paper's digits.
+  - This is a check that the tooling runs, not a model.
+- **Also:** `tools/evaluate.py --reading-cache` keeps readings on disk (a rerun
+  after a parser change reads nothing); `--held-out` scores a dataset's test
+  invoices only. Truth files take numbers as written (`"5,70"`).
+- **Decision:** keep the corrected geometry. It is what makes two photos of one
+  form line up, and the crops it produces are what a fine-tune will be trained
+  on. Do not re-tune the arithmetic repair to these three invoices.
+- **Left open:** the 0.75 threshold and the repair rules against a fine-tuned
+  model; whether to adapt the vision tower; CPU-only speed.
+
 ### Pending: needs the laptop
 - Re-export both invoices at the working resolution (`export_crops.py` should
   now print `read at ...x2000` and 41 labelled cells), re-run the benchmark on

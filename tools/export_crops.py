@@ -29,10 +29,14 @@ Both write `<out>/images/*.png` and `<out>/labels.jsonl`, one JSON object per li
     {"image": "images/sahror_r3c1.png", "text": "212000", "kind": "number",
      "role": "line_total", "source": "sahror/img.png", "cell": "r3c1"}
 
-Dates are not labelled from a truth file: the truth stores the ISO date, but the
-paper says "7/8/2026", and a crop labelled with text it does not show teaches the
-model to emit a format it cannot see. Add a `date_as_written` field to the truth
-first. (Unlabelled photo exports include the date cell.)
+A label is what the crop shows, not the normalized value. A number typed in the
+truth file as a string ("5,70") is labelled exactly so; one given as a JSON
+number gets its shortest spelling ("5.7"), which is wrong for a cell showing
+٥,٧٠ -- see `evaluation/schema.py`. A date is labelled day/month/year
+("7/8/2026"), how these forms are filled in, unless the truth gives
+`date_written`.
+
+`tools/build_finetune_dataset.py` turns these exports into a training set.
 
 Items are assigned to the non-blank item rows in order, top to bottom, which is
 how a handwritten invoice is filled in. A row count that disagrees with the
@@ -60,7 +64,7 @@ from core.domain.image_payload import ImagePayload  # noqa: E402
 from core.domain.layout import InvoiceLayout, LayoutRegion  # noqa: E402
 from core.domain.ocr import TextRegion  # noqa: E402
 from core.domain.roles import CellRole  # noqa: E402
-from evaluation.schema import InvoiceTruth  # noqa: E402
+from evaluation.schema import InvoiceTruth, plain_number  # noqa: E402
 from ocr.cropping.padded_cropper import PaddedRegionCropper  # noqa: E402
 from orchestration.flows.layout_driven import SKIPPED_ROLES  # noqa: E402
 from preprocessing.pipeline_builder import PreprocessingPipelineBuilder  # noqa: E402
@@ -76,35 +80,27 @@ ITEM_ROLES = {
 
 
 def _number(value: float | None) -> str | None:
-    """A truth amount as the digits written on the paper.
+    """A truth amount's shortest spelling (see `evaluation.schema.plain_number`).
 
-    Never ``:g``: it keeps six significant digits, so 214812.05 became
-    "214812" and every model was scored against a label that dropped the
-    cents.
+    A label is this only when the truth does not say how the number is written;
+    a truth file gives the written form by typing the number as a string.
     """
-    if value is None:
-        return None
-    if float(value).is_integer():
-        return str(int(value))
-    return f"{value:.2f}".rstrip("0").rstrip(".")
+    return plain_number(value)
 
 
 def _written_date(iso: str | None) -> str | None:
     """A truth date (ISO) as these forms carry it: day/month/year."""
-    if not iso:
-        return None
-    year, month, day = iso.split("-")
-    return f"{int(day)}/{int(month)}/{year}"
+    return InvoiceTruth(image="", date=iso).date_text if iso else None
 
 
 def header_labels(truth: InvoiceTruth) -> dict[CellRole, str | None]:
     return {
         CellRole.INVOICE_NUMBER: truth.invoice_number,
-        CellRole.INVOICE_DATE: _written_date(truth.date),
+        CellRole.INVOICE_DATE: truth.date_text,
         CellRole.CITY: truth.city,
         CellRole.MERCHANT_NAME: truth.customer_name,
-        CellRole.TOTAL_AMOUNT: _number(truth.total),
-        CellRole.TOTAL_IN_FIGURES: _number(truth.total),
+        CellRole.TOTAL_AMOUNT: truth.total_text,
+        CellRole.TOTAL_IN_FIGURES: truth.total_text,
     }
 
 
@@ -159,25 +155,57 @@ def _row(name: str, text: str | None, region: LayoutRegion, role: str, source: s
     }
 
 
-def export_labelled(page: PreparedPage, truth: InvoiceTruth, source: str, stem: str, out_dir: Path) -> list[dict]:
-    """Crops of the cells the truth file has a value for, labelled with it."""
-    # Item rows that hold writing, top to bottom.
-    rows: dict[int, dict[CellRole, object]] = {}
+def item_rows(page: PreparedPage) -> list[dict[CellRole, LayoutRegion]]:
+    """The layout's item rows, top to bottom, each as role -> cell."""
+    rows: dict[int, dict[CellRole, LayoutRegion]] = {}
     for region in page.layout.regions:
         if region.role in ITEM_ROLES and region.row is not None:
             rows.setdefault(region.row, {})[region.role] = region
-    # Top to bottom by position (a completed grid's inferred rows are not
-    # numbered in page order). An invoice is filled from the top, so the
+    # By position: a completed grid's inferred rows are not numbered in page order.
+    return [row for _, row in sorted(rows.items(), key=lambda kv: min(r.bbox.y for r in kv[1].values()))]
+
+
+def _has_writing(page: PreparedPage, row: dict[CellRole, LayoutRegion]) -> bool:
+    return any(not page.is_blank(region) for region in row.values())
+
+
+def export_empty(page: PreparedPage, truth: InvoiceTruth, source: str, stem: str, out_dir: Path) -> list[dict]:
+    """Crops of cells below the invoice's last item that hold no writing and
+    are still not blank enough for the pipeline to skip.
+
+    The service sends exactly these to the recognizer -- a dotted rule, the
+    tail of the row above -- and a recognizer that answers them with digits
+    invents a line item. Labelled `"text": ""` and `"empty": true`, they are
+    what teaches it to say the cell is empty. Nothing is returned when the
+    truth's items could not be paired with the first rows: which cells are
+    empty is then not known.
+    """
+    ordered = item_rows(page)
+    leading = ordered[: len(truth.items)]
+    if len(leading) != len(truth.items) or not all(_has_writing(page, row) for row in leading):
+        return []
+    rows_out: list[dict] = []
+    for row in ordered[len(leading):]:
+        for region in row.values():
+            if page.is_blank(region):
+                continue
+            name = page.write_crop(region, stem, out_dir)
+            if name is not None:
+                rows_out.append({**_row(name, "", region, region.role.value, source), "empty": True})
+    return rows_out
+
+
+def export_labelled(page: PreparedPage, truth: InvoiceTruth, source: str, stem: str, out_dir: Path) -> list[dict]:
+    """Crops of the cells the truth file has a value for, labelled with it."""
+    # Item rows, top to bottom. An invoice is filled from the top, so the
     # truth's N items belong to the first N rows -- provided each of them has
     # writing in it. Ink lower down does not make a row an item: on a form
     # whose writing sits on the row rules, letters and rule fragments spill
     # into the blank rows below, and no ink measure tells them apart from
     # faint writing (measured on both real forms).
-    ordered = [row for _, row in sorted(rows.items(), key=lambda kv: min(r.bbox.y for r in kv[1].values()))]
+    ordered = item_rows(page)
     leading = ordered[: len(truth.items)]
-    if len(leading) == len(truth.items) and all(
-        any(not page.is_blank(region) for region in row.values()) for row in leading
-    ):
+    if len(leading) == len(truth.items) and all(_has_writing(page, row) for row in leading):
         filled_rows = leading
         extra = sum(any(not page.is_blank(r) for r in row.values()) for row in ordered[len(leading):])
         if extra:
@@ -209,7 +237,7 @@ def export_labelled(page: PreparedPage, truth: InvoiceTruth, source: str, stem: 
     for row, item in zip(filled_rows, truth.items):
         for role, field_name in ITEM_ROLES.items():
             region = row.get(role)
-            value = item.product_name if field_name == "product_name" else _number(getattr(item, field_name))
+            value = item.product_name if field_name == "product_name" else item.text_of(field_name)
             if region is not None and value:
                 labelled.append((region, value, role.value))
 

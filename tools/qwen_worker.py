@@ -80,7 +80,7 @@ ARCH_CLASSES = {
 }
 FALLBACK_CLASS = "AutoModelForImageTextToText"
 
-__all__ = ["GENERATION", "MAX_SIDE", "QwenRuntime", "_DATE_CHARS", "_DIGITS", "_NUMBER_CHARS"]
+__all__ = ["GENERATION", "MAX_SIDE", "QwenRuntime", "_DATE_CHARS", "_DIGITS", "_NUMBER_CHARS", "chat_messages"]
 
 def _bytes_to_unicode() -> dict[int, str]:
     """GPT-2's byte <-> printable-character map, which byte-level BPE vocabularies use.
@@ -250,14 +250,39 @@ def fit(img, arch: str):
     return img.resize((nw, nh), Image.Resampling.LANCZOS) if (nw, nh) != (w, h) else img
 
 
+def chat_messages(image, prompt: str) -> list[dict]:
+    """The one conversation shape a crop is read under: the image, then the
+    instruction. `tools/finetune_recognizer.py` trains under the same one --
+    a model tuned on another arrangement is tested on one it never saw."""
+    return [{"role": "user", "content": [
+        {"type": "image", "image": image},
+        {"type": "text", "text": prompt},
+    ]}]
+
+
 class QwenRuntime:
     """A loaded model plus everything needed to read crops with it."""
 
     def __init__(self, model_dir: str, arch: str | None = None, max_new_tokens: int = 64):
+        # A fine-tuned model is a folder holding only an adapter and the name
+        # of the base model it belongs to (ocr/finetuning/lora.py).
+        adapter_dir = model_dir if (Path(model_dir) / "finetune.json").is_file() else None
+        if adapter_dir is not None:
+            from ocr.finetuning.lora import base_model_dir
+
+            model_dir = str(base_model_dir(adapter_dir, _PROJECT_ROOT))
+            if not Path(model_dir).is_dir():
+                raise RuntimeError(
+                    f"The fine-tuned model in '{adapter_dir}' belongs to the base model '{model_dir}', "
+                    "which is not there. Put the base model back, or correct `base_model` in finetune.json."
+                )
+
         info = inspect_model(model_dir)
         self.arch = arch or info["arch"]
         self.max_new_tokens_cap = max_new_tokens
         self.model, self.processor = self._load(model_dir, self.arch, info["quantized"])
+        if adapter_dir is not None:
+            self._apply_adapter(adapter_dir, info["quantized"])
         self.processor.tokenizer.padding_side = "left"
         # Built on the first constrained read, then reused for every crop.
         self._token_bytes: list[bytes | None] | None = None
@@ -323,6 +348,19 @@ class QwenRuntime:
         )
         return model, processor
 
+    def _apply_adapter(self, adapter_dir: str, quantized: bool) -> None:
+        """Add a fine-tune's low-rank updates into the loaded base weights."""
+        from ocr.finetuning.lora import load_adapter, merge_into
+
+        if quantized:
+            raise RuntimeError(
+                f"'{adapter_dir}' is a fine-tune of a quantized base model; an adapter can only be "
+                "added into full-precision weights."
+            )
+        state, scale = load_adapter(adapter_dir)
+        layers = merge_into(self.model, state, scale)
+        print(f"[worker] fine-tune '{adapter_dir}' added into {layers} layer(s)", file=sys.stderr, flush=True)
+
     # -- constrained decoding ---------------------------------------------
 
     def _constraint(self, charset: frozenset | None, prompt_len: int):
@@ -344,10 +382,7 @@ class QwenRuntime:
     def _inputs(self, images: list, prompts: list[str]):
         texts, vision = [], []
         for img, prompt in zip(images, prompts):
-            messages = [{"role": "user", "content": [
-                {"type": "image", "image": img},
-                {"type": "text", "text": prompt},
-            ]}]
+            messages = chat_messages(img, prompt)
             texts.append(self.processor.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True))
             vision.extend(self._process_vision_info(messages)[0]

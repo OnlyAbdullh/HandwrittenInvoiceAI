@@ -111,34 +111,40 @@ table_extraction:
         table_col_count: 4
         column_roles: [unit_price, quantity, product_name, line_total]
         header_roles: []
-        footer_roles: [total_amount, label]
-        # The page is kept around the table (perspective_correction's margin),
-        # so the printed caption row and the totals strip are inside the
-        # detected outline: the caption row is a header, the totals strip the
-        # row after the items.
+        # The written total is declared with the other unruled fields below.
+        # The strip's own two boxes are labelled captions so that, when the
+        # extractor does find them, they are not read a second time.
+        footer_roles: [label, label]
+        # The caption row (Price | Quantity | Description | Total) is ruled
+        # like an item row and sits one row pitch above the first item. It is
+        # the header whether or not the detected outline reaches it.
         printed_header_row: true
         footer_from_below: false
         ragged_row_slack: 1
         complete_grid: true
-        # Printed on dotted lines above the table, not in boxes, so no extractor
-        # finds them; declared relative to the table outline (fractions of its
-        # width from the left edge, of its height from the top; negative is
-        # above). Measured on bills/onlyone.
+        # Written on dotted lines, not in boxes, so no extractor finds them;
+        # declared relative to the item grid -- the 15 item rows by the four
+        # columns -- as fractions of its width from the left edge and of its
+        # height from the top of the first item row (negative is above it,
+        # more than 1 below the last row). Measured on bills/onlyone and
+        # bills/abd, two photos of this form by two writers: the same
+        # fractions frame each field on both.
         unruled_fields:
-          - {role: invoice_number, x: [0.04, 0.42],   y: [-0.11, -0.058]}
-          - {role: merchant_name,  x: [0.38, 0.80],   y: [-0.068, -0.002]}
-          - {role: invoice_date,   x: [-0.06, 0.235], y: [-0.055, -0.002]}
+          # The digits only: read with the printed "N°" beside them, the
+          # reading carried stray marks and was rejected whole.
+          - {role: invoice_number, x: [0.135, 0.40],  y: [-0.21, -0.145]}
+          - {role: merchant_name,  x: [0.375, 0.785], y: [-0.175, -0.088]}
+          - {role: invoice_date,   x: [-0.06, 0.216], y: [-0.145, -0.088]}
+          # The figures on the totals strip, between its two printed
+          # captions. Read with the captions, they came back as
+          # '3148150 ... ٥٠١'.
+          - {role: total_amount,   x: [0.17, 0.70],   y: [1.012, 1.072]}
         # The writing sits ON each row's dotted rule, so the printed cell
         # holds the tails of the row above and cuts off the bottom of its own
         # digits. A quarter of a row down recentres every item crop on its own
         # writing (inspected at 0, 0.2, 0.3, 0.4: 0.4 starts taking the row
         # below).
         item_vertical_shift: 0.25
-        # The totals strip is one box holding "المجموع", a dotted line,
-        # "فقط لا غير" and the figures; read whole, the figures came back as
-        # '3148150 ... ٥٠١'. Only the part where the figures are written.
-        field_insets:
-          total_amount: {x: [0.22, 0.84], y: [0.18, 1.0]}
 
 string_matching:
   algorithm: levenshtein

@@ -10,7 +10,7 @@ truth file (see evaluation/metrics.py for what is counted). Writes a Markdown
 and a JSON report under `evaluation/reports/`.
 
 Run it before and after every change meant to improve accuracy. A change that
-was not measured here has not been shown to help -- with two labelled invoices
+was not measured here has not been shown to help -- with three labelled invoices
 it has barely been shown at all, so label more (README: "Labelling invoices").
 
     python tools/evaluate.py --perfect-readings datasets/sahror datasets/onlyone
@@ -19,6 +19,26 @@ runs the same pipeline with every cell "read" as its label from those
 `tools/export_crops.py` folders, instead of by a model. What is still wrong
 then is the layout, the parser or the arithmetic -- not recognition. No model
 is loaded, so it runs anywhere.
+
+    python tools/evaluate.py --config config/default_config.yaml --reading-cache evaluation/reading_cache
+
+keeps every reading the model makes on disk and reads only crops it has not
+read before (`ocr/recognizers/cached_recognizer.py`). After a change to the
+parser or the arithmetic nothing is read again and the model is not loaded;
+after a change to the layout only the crops that moved are. A run that was
+stopped resumes from what it had read. Delete the folder after changing a
+prompt or the decoding policy.
+
+The JSON report lists every cell's raw reading and confidence under each
+invoice's `readings`.
+
+    python tools/evaluate.py --config config/default_config.yaml --held-out datasets/finetune --label base
+    INVOICE_AI_MODEL_DIR=OCR_Models/invoice-ft-001 python tools/evaluate.py \\
+        --config config/default_config.yaml --held-out datasets/finetune --label ft-001
+
+scores only the invoices of a fine-tuning dataset's test split, which is the
+only fair comparison of a fine-tuned model with the base one: any other
+invoice is one it was trained or selected on (docs/fine-tuning.md).
 """
 
 from __future__ import annotations
@@ -135,6 +155,23 @@ def item_raw_readings(run) -> list[dict[str, str | None]]:
     ]
 
 
+def all_readings(run) -> list[dict]:
+    """Every box that was read: its cell, role, raw text and confidence."""
+    out = []
+    for matched in getattr(run.result, "elements", []) or []:
+        element = matched.element
+        if not element.fragments:
+            continue
+        confidences = [f.confidence for f in element.fragments if f.confidence is not None]
+        out.append({
+            "cell": element.id.split(":")[-1],
+            "role": element.role.value,
+            "text": element.merged_text,
+            "confidence": round(min(confidences), 3) if confidences else None,
+        })
+    return out
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--config", default="config/qwen_config.yaml")
@@ -146,7 +183,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--perfect-readings", nargs="+", type=Path, metavar="EXPORT_DIR",
                    help="read every cell as its label from these export_crops folders (one per invoice, "
                         "named like the invoice's folder under bills/) instead of with the model")
+    p.add_argument("--reading-cache", type=Path, metavar="DIR",
+                   help="keep the model's readings in DIR and read only crops not read before")
+    p.add_argument("--held-out", type=Path, metavar="DATASET_DIR",
+                   help="score only the invoices in the test split of this fine-tuning dataset "
+                        "(tools/build_finetune_dataset.py): the ones no fine-tuned model has seen")
     return p.parse_args()
+
+
+def held_out_images(dataset_dir: Path) -> set[str]:
+    """The truth `image` paths in a fine-tuning dataset's test split."""
+    card = json.loads((dataset_dir / "dataset_card.json").read_text(encoding="utf-8"))
+    return set(card["splits"]["test"]["sources"])
 
 
 def utf8_console() -> None:
@@ -170,6 +218,14 @@ def main() -> int:
     if not truths:
         print(f"No truth files under {args.truth}", file=sys.stderr)
         return 2
+    if args.held_out:
+        kept = held_out_images(args.held_out)
+        truths = [truth for truth in truths if truth.image in kept]
+        if not truths:
+            print(f"The test split of {args.held_out} holds no invoice with a truth file under {args.truth}. "
+                  "With few invoices the split can be empty: label more, then rebuild the dataset.", file=sys.stderr)
+            return 2
+        print(f"Held-out invoices only: {len(truths)} of the test split of {args.held_out}.")
 
     config = load_config(args.config)
     # Score what the desktop app receives, whatever the config prints.
@@ -186,6 +242,13 @@ def main() -> int:
         config.ocr.recognizer.params = {}
         exports = {folder.name: folder for folder in args.perfect_readings}
         args.label = args.label or "perfect-readings"
+    elif args.reading_cache:
+        if config.ocr.recognizer is None:
+            print("--reading-cache needs a flow that reads with `ocr.recognizer`.", file=sys.stderr)
+            return 2
+        wrapped = {"name": config.ocr.recognizer.name, "params": dict(config.ocr.recognizer.params)}
+        config.ocr.recognizer.name = "cached"
+        config.ocr.recognizer.params = {"recognizer": wrapped, "cache_dir": str(args.reading_cache)}
 
     started = time.perf_counter()
     orchestrator = PipelineOrchestrator(config)
@@ -194,6 +257,7 @@ def main() -> int:
     print(f"Pipeline built in {load_seconds:.1f}s ({orchestrator.engine_name}).")
 
     scores: list[InvoiceScore] = []
+    readings_by_image: dict[str, list[dict]] = {}
     for truth in truths:
         image_path = Path(args.images) / truth.image
         print(f"- {truth.image} ...", end="", flush=True)
@@ -230,6 +294,7 @@ def main() -> int:
             readings=raw_readings(run), item_readings=item_raw_readings(run),
         )
         scores.append(score)
+        readings_by_image[truth.image] = all_readings(run)
         print(f" {seconds:.1f}s")
         if args.perfect_readings and PerfectReadings.unlabelled:
             print(f"    read as empty (no label in the export): {', '.join(PerfectReadings.unlabelled)}")
@@ -237,6 +302,12 @@ def main() -> int:
     # Measured while the model (and any llama-server or worker it started) is
     # still alive: a child's peak cannot be read once it has exited.
     run_info = {"load_seconds": load_seconds, "engine": orchestrator.engine_name, **process_tree_memory()}
+    recognizer = getattr(orchestrator.flow, "recognizer", None)
+    if args.reading_cache and hasattr(recognizer, "misses"):
+        # Seconds per invoice mean nothing for a run answered from the cache.
+        run_info["readings_from_cache"] = recognizer.hits
+        run_info["readings_made"] = recognizer.misses
+        print(f"Readings: {recognizer.misses} made by the model, {recognizer.hits} from {args.reading_cache}.")
 
     config_name = Path(args.config).name
     report = to_markdown(scores, config_name, run_info)
@@ -254,7 +325,8 @@ def main() -> int:
                 "run": run_info,
                 "summary": summarize(scores),
                 "invoices": [
-                    {**dataclasses.asdict(s), "complete": s.complete, "complete_without_review": s.complete_without_review}
+                    {**dataclasses.asdict(s), "complete": s.complete, "complete_without_review": s.complete_without_review,
+                     "readings": readings_by_image.get(s.image, [])}
                     for s in scores
                 ],
             },
